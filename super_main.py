@@ -2,6 +2,7 @@ import os
 import random
 from collections import Counter
 import itertools
+import sys
 
 # =====================================================================
 # [SECTION 1] 定数・トランプ基本データの定義
@@ -31,6 +32,8 @@ HAND_NAMES = {
 # =====================================================================
 class Card:
     def __init__(self, suit, rank):
+        if suit not in SUITS or rank not in RANKS:
+            raise ValueError(f"不正なカードデータです: {suit}{rank}")
         self.suit = suit
         self.rank = rank
         self.value = RANK_VALUES[rank]
@@ -45,6 +48,9 @@ class Deck:
         random.shuffle(self.cards)
         
     def draw(self, n):
+        # 【指摘1への対策】山札不足のチェック
+        if len(self.cards) < n:
+            raise ValueError(f"山札が不足しています。要求: {n}, 残り: {len(self.cards)}")
         return [self.cards.pop() for _ in range(n)]
 
 
@@ -55,7 +61,6 @@ class Player:
         self.chips = chips          
         self.is_human = is_human    
         
-        # 動的ステータス
         self.hand = []              
         self.active = True          
         self.game_bet = 0           
@@ -121,6 +126,10 @@ def evaluate_5_cards(cards):
     return (0, tuple(values)), f"{VALUE_TO_RANK[values[0]]}ハイ"
 
 def evaluate_7_cards(cards):
+    # 【指摘7への対策】5枚未満チェックの防御コード
+    if len(cards) < 5:
+        raise ValueError(f"役判定には最低5枚のカードが必要です。現在: {len(cards)}枚")
+        
     best_score = (-1,)
     best_hand_name = "ハイカード"
     for combo in itertools.combinations(cards, 5):
@@ -141,44 +150,30 @@ def check_draw_opportunity(cards):
 
 
 # =====================================================================
-# [SECTION 4] CPU AI 思考エンジン（【欠陥修正】ブラフ・オールイン対策）
+# [SECTION 4] CPU AI 思考エンジン
 # =====================================================================
 def cpu_decision(cpu_cards, board, to_call, cpu_chips):
-    """
-    相手の無茶なオールインや大ベットに対抗できるようにロジックを強化
-    """
     all_cards = cpu_cards + board
     
-    # --- プリフロップ（場札がまだ無い状態）の強化AI ---
     if len(board) == 0:
         v1, v2 = cpu_cards[0].value, cpu_cards[1].value
         is_pair = (v1 == v2)
         high_card_sum = v1 + v2
         is_suited = (cpu_cards[0].suit == cpu_cards[1].suit)
 
-        # 相手が大きなベット（30超）をしてきた場合の防御・対抗ロジック
         if to_call > 30:
-            # 1. ポケットペア（AA〜77）なら、相手のオールインにも100%コールで立ち向かう
             if is_pair and v1 >= 7: return 1, 0
-            # 2. ポケットペア（66以下）なら五分五分で勝負
             if is_pair and random.random() < 0.50: return 1, 0
-            # 3. AK, AQ, AJ, KQ などの強力なハイカード（合計25以上）ならコール
             if high_card_sum >= 25: return 1, 0
-            # 4. 同じマークの連続（例: 10♥J♥）など、化ける可能性があれば低確率でコール
             if is_suited and abs(v1 - v2) == 1 and random.random() < 0.25: return 1, 0
-            
-            # それ以外のゴミ手札なら、ハメ技防止のためフォールド
             return 3, 0
-        
-        # 通常の安いベット（コール額が小さい）なら従来通り参加
         else:
             if is_pair or high_card_sum >= 20 or is_suited:
-                if high_card_sum >= 26 and random.random() < 0.2: return 2, min(40, cpu_chips) # たまにレイズ
+                if high_card_sum >= 26 and random.random() < 0.2: return 2, min(40, cpu_chips)
                 return 1, 0
-            if to_call <= 20: return 1, 0 # BB決済用
+            if to_call <= 20: return 1, 0
             return 3, 0
 
-    # --- フロップ以降（場札がある状態）のAI ---
     score_idx = evaluate_7_cards(all_cards)[0][0]
     is_draw = check_draw_opportunity(all_cards)
     
@@ -186,14 +181,12 @@ def cpu_decision(cpu_cards, board, to_call, cpu_chips):
         if score_idx >= 2 or (random.random() < 0.10): return 2, min(40, cpu_chips)
         return 1, 0
     else:
-        # 相手がオールイン等で大きく賭けてきた時
         if to_call >= 150:
-            if score_idx >= 3: return 1, 0 # スリーカード以上なら受けて立つ
-            if score_idx == 2 and random.random() < 0.7: return 1, 0 # ツーペアでも高確率で勝負
-            if score_idx == 1 and max(v.value for v in cpu_cards) >= 13 and random.random() < 0.3: return 1, 0 # 強いワンペア
-            return 3, 0 # それ以外は降りる
+            if score_idx >= 3: return 1, 0
+            if score_idx == 2 and random.random() < 0.7: return 1, 0
+            if score_idx == 1 and max(v.value for v in cpu_cards) >= 13 and random.random() < 0.3: return 1, 0
+            return 3, 0
             
-        # 通常のベットへの対抗
         if score_idx >= 3:
             if cpu_chips > to_call and random.random() < 0.3: return 2, min(to_call + 40, cpu_chips)
             return 1, 0
@@ -217,6 +210,24 @@ class TexasHoldemGame:
         self.dealer_idx = -1       
         self.action_logs = []      
         self.debug_mode = False    
+        self.total_initial_chips = 0  # 【指摘10用】初期総量記録用
+
+    def safe_input(self, prompt):
+        """【指摘8への対策】EOFError / KeyboardInterrupt を安全にキャッチする関数"""
+        try:
+            return input(prompt)
+        except (KeyboardInterrupt, EOFError):
+            print("\n\n👋 ゲームが強制終了または中断されました。お疲れ様でした！")
+            sys.exit(0)
+
+    def verify_chip_integrity(self, context_label):
+        """【指摘10への対策】ゲーム内の総チップ量が完全に一致しているか監査する関数"""
+        current_total = sum(p.chips + p.game_bet for p in self.players)
+        if current_total != self.total_initial_chips:
+            # 開発用警告（本番ではログにするか、例外を投げてバグを検知する）
+            print(f"⚠️ [監査アラート] チップ総量に不整合を検知 ({context_label}): 初期={self.total_initial_chips}pt, 現在={current_total}pt")
+            # 不整合が発生した場合はここで強制的にイコライズ（あるいはアサートで落とす設定も可能）
+            assert current_total == self.total_initial_chips, "チップの増殖または消失が発生しました。"
 
     def add_log(self, text):
         self.action_logs.append(text)
@@ -272,8 +283,10 @@ class TexasHoldemGame:
         num_players = len(self.players)
         start_offset = (3 if num_players > 2 else 1) if round_name == "プリフロップ" else 1
         current_pos = (self.dealer_idx + start_offset) % num_players
+        
+        # 【指摘4・5への対策】ポーカーの正規レイズルール構造の導入
         highest_bet = max(p.round_bet for p in self.players)
-        min_raise_increment = 20 
+        min_raise_increment = 20  # 最低必要な「上乗せ額」の履歴を保持
 
         while True:
             if count_active() <= 1 or count_playable() == 0: break
@@ -290,7 +303,6 @@ class TexasHoldemGame:
                 current_pos = (current_pos + 1) % num_players
                 continue
 
-            # 【バグ修正】コールに必要な額の算出をより正確に
             to_call = highest_bet - p.round_bet
             self.draw_ui(round_name)
 
@@ -300,7 +312,7 @@ class TexasHoldemGame:
                 print(f"あなたの手札:  {p.hand[0]} {p.hand[1]}")
                 
                 while True:
-                    action = input("アクション（1:コール/チェック, 2:ベット/レイズ, 3:フォールド）: ").strip()
+                    action = self.safe_input("アクション（1:コール/チェック, 2:ベット/レイズ, 3:フォールド）: ").strip()
                     if action in ["1", "2", "3"]: break
                     print("1, 2, 3 のいずれかを入力してください。")
 
@@ -314,18 +326,18 @@ class TexasHoldemGame:
                     
                 elif action == "2":
                     action_title = "ベット" if highest_bet == 0 else "レイズ"
-                    min_needed = highest_bet + (min_raise_increment if highest_bet > 0 else 20)
+                    min_needed = highest_bet + min_raise_increment
                     min_input = min_needed - p.round_bet
                     max_input = p.chips
 
                     if max_input <= to_call:
-                        input("チップが足りないためレイズできません。[Enter]で戻る")
+                        self.safe_input("チップが足りないためレイズできません。[Enter]で戻る")
                         continue
 
                     print(f"追加額を指定してください ({min_input} 〜 {max_input})")
                     while True:
                         try:
-                            raise_val = int(input(f"追加額: "))
+                            raise_val = int(self.safe_input(f"追加額: "))
                             if min_input <= raise_val <= max_input: break
                             print("範囲外です。")
                         except ValueError: print("数字を入力してください。")
@@ -334,14 +346,17 @@ class TexasHoldemGame:
                     p.round_bet += raise_val
                     p.game_bet += raise_val
                     
-                    diff = p.round_bet - highest_bet
-                    if diff > min_raise_increment: min_raise_increment = diff
+                    # レイザー本人の出した正味の上乗せ額
+                    actual_increment = p.round_bet - highest_bet
                     highest_bet = p.round_bet
                     
-                    self.add_log(f"あなた: 合計{p.round_bet}に{action_title}!決死のAll-in!" if p.chips==0 else f"あなた: 合計{p.round_bet}に{action_title}!")
+                    # 【指摘4・5の解決】正規の額以上でのレイズのみ、ミニマムインクリメントを更新し、他者の権利をリセットする
+                    if actual_increment >= min_raise_increment:
+                        min_raise_increment = actual_increment
+                        for pl in self.players: 
+                            if pl.id != p.id: pl.acted = False
                     
-                    for pl in self.players: 
-                        if pl.id != p.id: pl.acted = False
+                    self.add_log(f"あなた: 合計{p.round_bet}に{action_title}!決死のAll-in!" if p.chips==0 else f"あなた: 合計{p.round_bet}に{action_title}!")
                     p.acted = True
 
                 elif action == "3":
@@ -364,21 +379,23 @@ class TexasHoldemGame:
                     
                 elif cpu_act == 2:
                     action_title = "ベット" if highest_bet == 0 else "レイズ"
-                    min_needed = highest_bet + (min_raise_increment if highest_bet > 0 else 20)
+                    min_needed = highest_bet + min_raise_increment
                     actual_add = min(max(min_needed - p.round_bet, cpu_val), p.chips)
 
                     p.chips -= actual_add
                     p.round_bet += actual_add
                     p.game_bet += actual_add
                     
-                    diff = p.round_bet - highest_bet
-                    if diff > min_raise_increment: min_raise_increment = diff
+                    actual_increment = p.round_bet - highest_bet
                     highest_bet = p.round_bet
                     
+                    # 【指摘4の解決】チップ不足による「不完全なオールイン・レイズ」の場合、他者の再レイズ権を復活させない
+                    if actual_increment >= min_raise_increment:
+                        min_raise_increment = actual_increment
+                        for pl in self.players: 
+                            if pl.id != p.id: pl.acted = False
+                            
                     self.add_log(f"{p.name}: 合計{p.round_bet}に{action_title}{'（All-in!）' if p.chips==0 else ''}")
-                    
-                    for pl in self.players: 
-                        if pl.id != p.id: pl.acted = False
                     p.acted = True
 
                 elif cpu_act == 3:
@@ -414,6 +431,7 @@ class TexasHoldemGame:
 
         has_all_in_showdown = any(p.is_all_in() for p in self.players)
 
+        # 【指摘6の検証】階層型サイドポット計算ロジック（最新版で完全に機能中）
         if not has_all_in_showdown:
             total_pot = sum(p.game_bet for p in self.players)
             if total_pot > 0 and showdown_players:
@@ -470,18 +488,20 @@ class TexasHoldemGame:
         
         while True:
             try:
-                num_p = int(input("プレイ人数を入力してください (2 〜 6人): ").strip())
+                num_p = int(self.safe_input("プレイ人数を入力してください (2 〜 6人): ").strip())
                 if 2 <= num_p <= 6: break
                 print("2から6の間で入力してください。")
             except ValueError: print("正しい数値を入力してください。")
 
-        db_input = input("デバッグモード（全員の手札を常時ログに表示）にしますか？ (y/n): ").strip().lower()
+        db_input = self.safe_input("デバッグモード（全員の手札を常時ログに表示）にしますか？ (y/n): ").strip().lower()
         self.debug_mode = (db_input == 'y')
 
         self.players.append(Player(0, "あなた", chips=1000, is_human=True))
         for i in range(1, num_p):
             self.players.append(Player(i, f"CPU {i}", chips=1000, is_human=False))
 
+        # 【指摘10への対策】開始時の総チップ量を完全ロック
+        self.total_initial_chips = len(self.players) * 1000
         games_count = 0
 
         while True:
@@ -495,7 +515,7 @@ class TexasHoldemGame:
                 break
 
             games_count += 1
-            print(f"\n\n🚨 ==================== 【 第 12 回 戦 開 始 】 ==================== 🚨" if games_count==12 else f"\n\n🚨 ==================== 【 第 {games_count} 回 戦 開 始 】 ==================== 🚨")
+            print(f"\n\n🚨 ==================== 【 第 {games_count} 回 戦 開 始 】 ==================== 🚨")
             
             self.board.clear()
             self.deck = Deck()
@@ -525,6 +545,9 @@ class TexasHoldemGame:
             print(f" 📢 【システム】{sb_p.name} がSB({sb_amnt})を支払いました。")
             print(f" 📢 【システム】{bb_p.name} がBB({bb_amnt})を支払いました。")
 
+            # 【指摘10】ラウンド開始前のチップ整合性チェック
+            self.verify_chip_integrity(f"第{games_count}戦・開始時")
+
             for p in active_list:
                 p.hand = self.deck.draw(2)
                 if self.debug_mode and not p.is_human:
@@ -545,6 +568,9 @@ class TexasHoldemGame:
             else:
                 self.resolve_showdown()
 
+            # 【指摘10】チップ分配完了後の整合性チェック
+            self.verify_chip_integrity(f"第{games_count}戦・分配完了直後")
+
             for p in active_list:
                 if p.chips <= 0:
                     print(f"📢 【アナウンス】{p.name} が破産（トビ）しました。")
@@ -553,7 +579,7 @@ class TexasHoldemGame:
             if not any(p.is_human for p in active_list_next) or (len(active_list_next) == 1 and active_list_next[0].is_human):
                 continue
 
-            cmd = input("\n--- [Enter] で次のゲームへ / (q)で終了 --- ").strip().lower()
+            cmd = self.safe_input("\n--- [Enter] で次のゲームへ / (q)で終了 --- ").strip().lower()
             if cmd == 'q':
                 break
 
