@@ -237,18 +237,16 @@ def cpu_decision(cpu_cards, board, to_call_bb, cpu_chips_bb):
         high_card_sum = v1 + v2
         is_suited = (cpu_cards[0].suit == cpu_cards[1].suit)
 
-        if to_call_bb > 1.5:
-            if is_pair and v1 >= 7: return 1, 0
-            if is_pair and random.random() < 0.50: return 1, 0
-            if high_card_sum >= 25: return 1, 0  
-            if is_suited and abs(v1 - v2) == 1 and random.random() < 0.25: return 1, 0
+        if to_call_bb > 0:
+            if is_pair and v1 >= 5: return 1, 0  
+            if high_card_sum >= 20: return 1, 0  
+            if is_suited and abs(v1 - v2) <= 2: return 1, 0
+            if to_call_bb <= 1.0: return 1, 0 
             return 3, 0 
         else:
-            if is_pair or high_card_sum >= 20 or is_suited:
-                if high_card_sum >= 26 and random.random() < 0.2: return 2, min(2.0, cpu_chips_bb) 
-                return 1, 0
-            if to_call_bb <= 1.0: return 1, 0
-            return 3, 0
+            if is_pair or high_card_sum >= 22:
+                return 2, min(2.0, cpu_chips_bb) 
+            return 1, 0
 
     score_idx = evaluate_7_cards(all_cards)[0][0]
     is_draw = check_draw_opportunity(all_cards)
@@ -337,13 +335,12 @@ class TexasHoldemGame:
         print(f"----------------------------------------------------------------------")
 
     def handle_human_action(self, p, to_call, highest_bet, min_raise_increment, can_raise):
-        print(f"【あなたの番】 所持: {p.chips}pt | コールに必要な額: {to_call}pt")
+        call_label = "チェック" if to_call == 0 else f"{to_call}ptでコール"
+        print(f"【あなたの番】 所持: {p.chips}pt | アクションに必要な額: {call_label}")
         print(f"あなたの手札:  {p.hand[0]} {p.hand[1]}")
         
-        # UI表記の動的改善（ベット vs レイズ）
         raise_label = "ベット" if highest_bet == 0 else "レイズ"
         
-        # 【無限ループバグ＆再レイズ禁止ルールの徹底防御】
         min_needed = highest_bet + min_raise_increment
         min_input = min_needed - p.round_bet
         max_input = p.chips
@@ -351,15 +348,13 @@ class TexasHoldemGame:
         is_all_in_raise = False
         if can_raise:
             if max_input <= to_call:
-                # チップがコール額以下ならレイズの選択肢自体が破綻するのでコールかフォールドのみ
                 can_raise = False
             elif min_input > max_input:
-                # 【バグ1の修正】コールは超えるが、正規ミニマムレイズに満たない場合は「2: オールイン」にUIを切り替え
                 raise_label = "強制オールイン・レイズ"
                 is_all_in_raise = True
 
         while True:
-            menu_str = f"アクション（1:コール/チェック"
+            menu_str = f"アクション（1:{'チェック' if to_call == 0 else 'コール'}"
             if can_raise:
                 menu_str += f", 2:{raise_label}"
             menu_str += ", 3:フォールド）: "
@@ -373,10 +368,8 @@ class TexasHoldemGame:
             return "call", min(to_call, p.chips)
         elif action == "2":
             if is_all_in_raise:
-                # 数値入力をスキップして全額全賭け（無限ループを完全回避）
                 return "raise", p.chips
                 
-            # 【UI表現の改善】文言をベット額(総額)か上乗せ額かで分岐
             if highest_bet == 0:
                 print(f"ベットする【総額】を指定してください ({min_input} 〜 {max_input}pt)")
             else:
@@ -397,7 +390,6 @@ class TexasHoldemGame:
         
         cpu_act, cpu_val_pt = cpu_decision(p.hand, self.board, to_call_bb, cpu_chips_bb)
         
-        # 再レイズ権が止められている場合はコールへ強制ダウングレード
         if cpu_act == 2 and not can_raise: 
             cpu_act = 1
         if cpu_act == 2 and p.chips <= to_call: 
@@ -432,7 +424,7 @@ class TexasHoldemGame:
                 min_raise_increment = actual_increment
                 for pl in self.players:
                     if pl.id != p.id and pl.status == HandStatus.PLAYING:
-                        pl.acted = False  # 正規レイズのみ全員の再レイズ権を開放
+                        pl.acted = False  
                         
             if p.chips == 0: p.status = HandStatus.ALL_IN
             self.add_log(f"{p.name}: 合計{p.round_bet}ptに{action_title}!{'（All-in!）' if p.chips==0 else ''}")
@@ -454,21 +446,17 @@ class TexasHoldemGame:
         def count_playable(): return sum(1 for p in self.players if p.can_make_action())
         def count_alive(): return sum(1 for p in self.players if p.is_active_in_hand())
 
-        # 【バグ2の完全修正】脱落者を完全に排除した「現在生存アクターリスト」ベースでの順序制御
         active_p_list = [p for p in self.players if not p.is_busted]
         num_active = len(active_p_list)
         
-        # ディーラーが生存者リストのどこにいるかを検索
         dealer_active_idx = next(i for i, p in enumerate(active_p_list) if p.id == self.dealer_idx)
         
         if num_active == 2:
-            # ヘッズアップ（2人）ルールの完全適用
             if round_name == "プリフロップ":
-                list_cursor = dealer_active_idx  # プリフロップはSB（ディーラー）が先手
+                list_cursor = dealer_active_idx  
             else:
-                list_cursor = (dealer_active_idx + 1) % num_active # フロップ以降はBBが先手
+                list_cursor = (dealer_active_idx + 1) % num_active 
         else:
-            # マルチプレイヤー（3人以上）ルール
             start_offset = 3 if round_name == "プリフロップ" else 1
             list_cursor = (dealer_active_idx + start_offset) % num_active
 
@@ -492,8 +480,6 @@ class TexasHoldemGame:
 
             to_call = highest_bet - p.round_bet
             
-            # 【バグ3の完全修正】不完全オールイン時の「再レイズ権利の剥奪」ロジック
-            # すでに一度意思表明(acted=True)しており、かつコール要求額が残っている（＝不完全オールインで中途半端に釣り上げられた）場合はレイズ不可
             can_raise = True
             if p.acted and to_call > 0:
                 can_raise = False
@@ -581,15 +567,19 @@ class TexasHoldemGame:
                 if self.debug_mode and not p.is_human:
                     print(f" [DEBUG] {p.name} の手札: {p.hand[0]}{p.hand[1]}")
 
-            self.run_betting_round("プリロップ")
+            self.run_betting_round("プリフロップ")
 
+            # 【仕様修正】アクションできる人がいなくなっても、勝負中（降りていない）の人が複数いれば場札を最後まで引く
             for phase in ["フロップ", "ターン", "リバー"]:
-                alive_count = sum(1 for p in self.players if p.status == HandStatus.PLAYING)
-                playable_count = sum(1 for p in self.players if p.can_make_action())
+                survivors_count = sum(1 for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted)
                 
-                if alive_count + sum(1 for p in self.players if p.status == HandStatus.ALL_IN) > 1 and playable_count >= 1:
-                    self.board.extend(self.deck.draw(3 if phase == "フロップ" else 1))
-                    self.run_betting_round(phase)
+                if survivors_count > 1:
+                    if (phase == "フロップ" and len(self.board) < 3) or (phase in ["ターン", "リバー"] and len(self.board) < 5):
+                        self.board.extend(self.deck.draw(3 if phase == "フロップ" else 1))
+                    
+                    playable_count = sum(1 for p in self.players if p.can_make_action())
+                    if playable_count >= 2:
+                        self.run_betting_round(phase)
 
             survivors = [p for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted]
             
@@ -598,7 +588,12 @@ class TexasHoldemGame:
                 total_pot = sum(p.game_bet for p in self.players)
                 winner.chips += total_pot
                 print(f"\n全員がフォールドしたため、{winner.name} の不戦勝です！\n 💰 {total_pot}pt を獲得。")
+                
+                for p in self.players:
+                    p.game_bet = 0
             else:
+                # 最終的なボード状態をUIで確認できるようにする
+                self.draw_ui("ショーダウン")
                 print("\n" + "=" * 70)
                 print(" 🔥 [LOG] ショーダウン結果発表 🔥")
                 print("=" * 70)
@@ -613,6 +608,10 @@ class TexasHoldemGame:
                 for log in distribution_logs:
                     print(log)
                 print("======================================================================\n")
+                
+                # 【会計監査バグ修正】ショーダウン配当完了後、全員のベット残高を正常にクリア
+                for p in self.players:
+                    p.game_bet = 0
 
             self.verify_chip_integrity(f"第{games_count}戦・配当完了後")
 
