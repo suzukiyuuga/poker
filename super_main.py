@@ -3,9 +3,10 @@ import random
 from collections import Counter
 import itertools
 import sys
+from enum import Enum, auto
 
 # =====================================================================
-# [SECTION 1] 定数・トランプ基本データの定義
+# [SECTION 1] 定数・構造体・エナムの定義
 # =====================================================================
 SUITS = ["♠", "♥", "♦", "♣"]
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
@@ -13,27 +14,31 @@ RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 RANK_VALUES = {r: i + 2 for i, r in enumerate(RANKS)}
 VALUE_TO_RANK = {v: r for r, v in RANK_VALUES.items()}
 
+class HandStatus(Enum):
+    PLAYING = auto()  # ハンドに参戦中
+    FOLDED = auto()   # フォールドした
+    ALL_IN = auto()   # オールインしている
+
+class GameStructure:
+    def __init__(self, sb=10, bb=20, min_raise_inc=20):
+        self.SB = sb
+        self.BB = bb
+        self.MIN_RAISE_INCREMENT = min_raise_inc
+
 HAND_NAMES = {
-    9: "ロイヤルストレートフラッシュ", 
-    8: "ストレートフラッシュ", 
-    7: "フォーカード",
-    6: "フルハウス", 
-    5: "フラッシュ", 
-    4: "ストレート",
-    3: "スリーカード", 
-    2: "ツーペア", 
-    1: "ワンペア", 
-    0: "ハイカード"
+    9: "ロイヤルストレートフラッシュ", 8: "ストレートフラッシュ", 7: "フォーカード",
+    6: "フルハウス", 5: "フラッシュ", 4: "ストレート",
+    3: "スリーカード", 2: "ツーペア", 1: "ワンペア", 0: "ハイカード"
 }
 
 
 # =====================================================================
-# [SECTION 2] データ構造クラス
+# [SECTION 2] データ構造・オブジェクトクラス
 # =====================================================================
 class Card:
     def __init__(self, suit, rank):
         if suit not in SUITS or rank not in RANKS:
-            raise ValueError(f"不正なカードデータです: {suit}{rank}")
+            raise ValueError(f"不正なカードデータ: {suit}{rank}")
         self.suit = suit
         self.rank = rank
         self.value = RANK_VALUES[rank]
@@ -48,9 +53,8 @@ class Deck:
         random.shuffle(self.cards)
         
     def draw(self, n):
-        # 【指摘1への対策】山札不足のチェック
         if len(self.cards) < n:
-            raise ValueError(f"山札が不足しています。要求: {n}, 残り: {len(self.cards)}")
+            raise ValueError(f"山札不足。 要求枚数: {n}, 残り: {len(self.cards)}")
         return [self.cards.pop() for _ in range(n)]
 
 
@@ -61,8 +65,9 @@ class Player:
         self.chips = chips          
         self.is_human = is_human    
         
+        self.status = HandStatus.PLAYING
+        self.is_busted = False       
         self.hand = []              
-        self.active = True          
         self.game_bet = 0           
         self.round_bet = 0          
         self.acted = False          
@@ -71,26 +76,96 @@ class Player:
 
     def reset_for_new_round(self):
         self.round_bet = 0
-        self.acted = False
+        if self.status == HandStatus.PLAYING:
+            self.acted = False
 
     def reset_for_new_game(self):
         self.hand = []
-        self.active = (self.chips > 0) 
         self.game_bet = 0
         self.round_bet = 0
         self.acted = False
         self.score = (-1,)
         self.hand_name = ""
+        if self.chips <= 0:
+            self.is_busted = True
+            self.status = HandStatus.FOLDED
+        else:
+            self.status = HandStatus.PLAYING
 
-    def is_all_in(self):
-        return self.active and self.chips == 0 and self.game_bet > 0
+    def is_active_in_hand(self):
+        return (not self.is_busted) and (self.status != HandStatus.FOLDED)
 
-    def is_playable(self):
-        return self.active and self.chips > 0
+    def can_make_action(self):
+        return self.is_active_in_hand() and (self.status != HandStatus.ALL_IN)
 
 
 # =====================================================================
-# [SECTION 3] 役の判定ロジック
+# [SECTION 3] ポーカー会計システム
+# =====================================================================
+class SidePot:
+    def __init__(self, amount=0):
+        self.amount = amount
+        self.eligible_player_ids = []
+
+
+class PotManager:
+    def __init__(self):
+        self.pots = []
+
+    def build_pots(self, players):
+        self.pots.clear()
+        active_bets = sorted(list(set(p.game_bet for p in players if p.game_bet > 0)))
+        previous_level = 0
+        
+        for level in active_bets:
+            current_pot = SidePot()
+            pot_chips = 0
+            
+            for p in players:
+                if p.game_bet >= level:
+                    pot_chips += (level - previous_level)
+                    if p.status != HandStatus.FOLDED and not p.is_busted:
+                        current_pot.eligible_player_ids.append(p.id)
+                else:
+                    contribution = p.game_bet - previous_level
+                    if contribution > 0:
+                        pot_chips += contribution
+            
+            if pot_chips > 0:
+                current_pot.amount = pot_chips
+                if not current_pot.eligible_player_ids:
+                    current_pot.eligible_player_ids = [pl.id for pl in players if pl.status != HandStatus.FOLDED and not pl.is_busted]
+                self.pots.append(current_pot)
+                
+            previous_level = level
+
+    def distribute_pots(self, players):
+        log_messages = []
+        self.build_pots(players)
+        player_dict = {p.id: p for p in players}
+        
+        for idx, pot in enumerate(self.pots):
+            if pot.amount == 0 or not pot.eligible_player_ids:
+                continue
+                
+            eligible_players = [player_dict[pid] for pid in pot.eligible_player_ids]
+            max_score = max(p.score for p in eligible_players)
+            winners = [p for p in eligible_players if p.score == max_score]
+            
+            share = pot.amount // len(winners)
+            remainder = pot.amount % len(winners)
+            
+            pot_label = "メインポット" if idx == 0 else f"サイドポット [{idx}]"
+            for i, w in enumerate(winners):
+                bonus = 1 if i < remainder else 0
+                w.chips += (share + bonus)
+                log_messages.append(f" 💰 【会計ログ】{pot_label}(総額:{pot.amount}) から {w.name} へ {share + bonus}pt 分配しました。")
+                
+        return log_messages
+
+
+# =====================================================================
+# [SECTION 4] 役判定 & ドロー判定エンジン
 # =====================================================================
 def check_straight(values):
     if len(values) != 5: return False, 0
@@ -126,10 +201,8 @@ def evaluate_5_cards(cards):
     return (0, tuple(values)), f"{VALUE_TO_RANK[values[0]]}ハイ"
 
 def evaluate_7_cards(cards):
-    # 【指摘7への対策】5枚未満チェックの防御コード
     if len(cards) < 5:
-        raise ValueError(f"役判定には最低5枚のカードが必要です。現在: {len(cards)}枚")
-        
+        raise ValueError(f"役判定の防御壁: 最低5枚必要です。現在 {len(cards)}枚")
     best_score = (-1,)
     best_hand_name = "ハイカード"
     for combo in itertools.combinations(cards, 5):
@@ -140,19 +213,22 @@ def evaluate_7_cards(cards):
 
 def check_draw_opportunity(cards):
     if len(cards) < 4: return False
-    if any(count >= 4 for count in Counter([c.suit for c in cards]).values()): return True
+    if any(count == 4 for count in Counter([c.suit for c in cards]).values()):
+        return True
     values = set(c.value for c in cards)
-    if 14 in values: values.add(1)
-    sorted_vals = sorted(list(values))
-    for i in range(len(sorted_vals) - 3):
-        if sorted_vals[i+3] - sorted_vals[i] <= 4: return True
+    if 14 in values: 
+        values.add(1)
+    for start in range(1, 12):
+        window = set(range(start, start + 5))
+        if len(window.intersection(values)) == 4:
+            return True
     return False
 
 
 # =====================================================================
-# [SECTION 4] CPU AI 思考エンジン
+# [SECTION 5] 相対評価型 CPU AI 思考エンジン
 # =====================================================================
-def cpu_decision(cpu_cards, board, to_call, cpu_chips):
+def cpu_decision(cpu_cards, board, to_call_bb, cpu_chips_bb):
     all_cards = cpu_cards + board
     
     if len(board) == 0:
@@ -161,46 +237,46 @@ def cpu_decision(cpu_cards, board, to_call, cpu_chips):
         high_card_sum = v1 + v2
         is_suited = (cpu_cards[0].suit == cpu_cards[1].suit)
 
-        if to_call > 30:
+        if to_call_bb > 1.5:
             if is_pair and v1 >= 7: return 1, 0
             if is_pair and random.random() < 0.50: return 1, 0
-            if high_card_sum >= 25: return 1, 0
+            if high_card_sum >= 25: return 1, 0  
             if is_suited and abs(v1 - v2) == 1 and random.random() < 0.25: return 1, 0
-            return 3, 0
+            return 3, 0 
         else:
             if is_pair or high_card_sum >= 20 or is_suited:
-                if high_card_sum >= 26 and random.random() < 0.2: return 2, min(40, cpu_chips)
+                if high_card_sum >= 26 and random.random() < 0.2: return 2, min(2.0, cpu_chips_bb) 
                 return 1, 0
-            if to_call <= 20: return 1, 0
+            if to_call_bb <= 1.0: return 1, 0
             return 3, 0
 
     score_idx = evaluate_7_cards(all_cards)[0][0]
     is_draw = check_draw_opportunity(all_cards)
     
-    if to_call == 0:
-        if score_idx >= 2 or (random.random() < 0.10): return 2, min(40, cpu_chips)
+    if to_call_bb == 0:
+        if score_idx >= 2 or (random.random() < 0.10): return 2, min(2.0, cpu_chips_bb)
         return 1, 0
     else:
-        if to_call >= 150:
-            if score_idx >= 3: return 1, 0
+        if to_call_bb >= 7.5:
+            if score_idx >= 3: return 1, 0 
             if score_idx == 2 and random.random() < 0.7: return 1, 0
             if score_idx == 1 and max(v.value for v in cpu_cards) >= 13 and random.random() < 0.3: return 1, 0
             return 3, 0
             
         if score_idx >= 3:
-            if cpu_chips > to_call and random.random() < 0.3: return 2, min(to_call + 40, cpu_chips)
+            if cpu_chips_bb > to_call_bb and random.random() < 0.3: return 2, min(to_call_bb + 2.0, cpu_chips_bb)
             return 1, 0
         if score_idx in [1, 2]:
             return 1, 0
         if score_idx == 0:
-            if is_draw and to_call <= 100: return 1, 0
-            if to_call <= 30: return 1, 0
+            if is_draw and to_call_bb <= 5.0: return 1, 0
+            if to_call_bb <= 1.5: return 1, 0
             return 3, 0
         return 1, 0
 
 
 # =====================================================================
-# [SECTION 5] ゲーム進行・管理クラス
+# [SECTION 6] ゲーム進行・管理クラス
 # =====================================================================
 class TexasHoldemGame:
     def __init__(self):
@@ -210,48 +286,45 @@ class TexasHoldemGame:
         self.dealer_idx = -1       
         self.action_logs = []      
         self.debug_mode = False    
-        self.total_initial_chips = 0  # 【指摘10用】初期総量記録用
+        
+        self.rules = GameStructure()   
+        self.pot_manager = PotManager() 
 
     def safe_input(self, prompt):
-        """【指摘8への対策】EOFError / KeyboardInterrupt を安全にキャッチする関数"""
         try:
             return input(prompt)
         except (KeyboardInterrupt, EOFError):
-            print("\n\n👋 ゲームが強制終了または中断されました。お疲れ様でした！")
+            print("\n\n👋 ゲームが強制終了されました。プログラムを安全にシャットダウンします。")
             sys.exit(0)
 
     def verify_chip_integrity(self, context_label):
-        """【指摘10への対策】ゲーム内の総チップ量が完全に一致しているか監査する関数"""
-        current_total = sum(p.chips + p.game_bet for p in self.players)
-        if current_total != self.total_initial_chips:
-            # 開発用警告（本番ではログにするか、例外を投げてバグを検知する）
-            print(f"⚠️ [監査アラート] チップ総量に不整合を検知 ({context_label}): 初期={self.total_initial_chips}pt, 現在={current_total}pt")
-            # 不整合が発生した場合はここで強制的にイコライズ（あるいはアサートで落とす設定も可能）
-            assert current_total == self.total_initial_chips, "チップの増殖または消失が発生しました。"
+        total_current_chips = sum(p.chips for p in self.players) + sum(p.game_bet for p in self.players)
+        expected_total = len(self.players) * 1000
+        if total_current_chips != expected_total:
+            raise AssertionError(f"[致命的な会計監査エラー: {context_label}] 理論値:{expected_total}pt, 実測値:{total_current_chips}pt")
 
     def add_log(self, text):
         self.action_logs.append(text)
 
     def draw_ui(self, round_name):
         total_pot = sum(p.game_bet for p in self.players)
-        
         print("\n" + "#" * 70)
-        print(f"### DEBUG SNAPSHOT: {round_name} ###  [総ポット: {total_pot} チップ]")
+        print(f"### ROUND SNAPSHOT: {round_name} ###  [場にある総チップ: {total_pot} pt]")
         print("#" * 70)
         
         half = (len(self.players) + 1) // 2
         for i in range(half):
             p1 = self.players[i]
             d1 = "[D]" if i == self.dealer_idx else "   "
-            status1 = "FOLD" if not p1.active else f"Bet:{p1.round_bet}"
-            if p1.is_all_in(): status1 = "ALL-IN"
+            status1 = p1.status.name if p1.status != HandStatus.PLAYING else f"Bet:{p1.round_bet}"
+            if p1.is_busted: status1 = "BUSTED"
             p1_str = f"{d1} {p1.name:<6}: {p1.chips:>4}pt ({status1})"
             
             if i + half < len(self.players):
                 p2 = self.players[i + half]
                 d2 = "[D]" if (i + half) == self.dealer_idx else "   "
-                status2 = "FOLD" if not p2.active else f"Bet:{p2.round_bet}"
-                if p2.is_all_in(): status2 = "ALL-IN"
+                status2 = p2.status.name if p2.status != HandStatus.PLAYING else f"Bet:{p2.round_bet}"
+                if p2.is_busted: status2 = "BUSTED"
                 p2_str = f"{d2} {p2.name:<6}: {p2.chips:>4}pt ({status2})"
                 print(f"{p1_str:<35} | {p2_str}")
             else:
@@ -259,227 +332,182 @@ class TexasHoldemGame:
                 
         print(f"場札 (Board): {' '.join(map(str, self.board)) if self.board else '[ まだ開いていません ]'}")
         print(f"----------------------------------------------------------------------")
-        print(f"【このラウンドのアクション履歴】")
-        if not self.action_logs: 
-            print("  （なし）")
-        else:
-            for log in self.action_logs[-8:]: 
-                print(f"  • {log}")
+        print(f"【アクション履歴】")
+        for log in self.action_logs[-6:]: print(f"  • {log}")
         print(f"----------------------------------------------------------------------")
+
+    def handle_human_action(self, p, to_call, highest_bet, min_raise_increment, can_raise):
+        print(f"【あなたの番】 所持: {p.chips}pt | コールに必要な額: {to_call}pt")
+        print(f"あなたの手札:  {p.hand[0]} {p.hand[1]}")
+        
+        # UI表記の動的改善（ベット vs レイズ）
+        raise_label = "ベット" if highest_bet == 0 else "レイズ"
+        
+        # 【無限ループバグ＆再レイズ禁止ルールの徹底防御】
+        min_needed = highest_bet + min_raise_increment
+        min_input = min_needed - p.round_bet
+        max_input = p.chips
+
+        is_all_in_raise = False
+        if can_raise:
+            if max_input <= to_call:
+                # チップがコール額以下ならレイズの選択肢自体が破綻するのでコールかフォールドのみ
+                can_raise = False
+            elif min_input > max_input:
+                # 【バグ1の修正】コールは超えるが、正規ミニマムレイズに満たない場合は「2: オールイン」にUIを切り替え
+                raise_label = "強制オールイン・レイズ"
+                is_all_in_raise = True
+
+        while True:
+            menu_str = f"アクション（1:コール/チェック"
+            if can_raise:
+                menu_str += f", 2:{raise_label}"
+            menu_str += ", 3:フォールド）: "
+            
+            action = self.safe_input(menu_str).strip()
+            if action == "1" or action == "3": break
+            if action == "2" and can_raise: break
+            print("有効な選択肢を入力してください。")
+            
+        if action == "1":
+            return "call", min(to_call, p.chips)
+        elif action == "2":
+            if is_all_in_raise:
+                # 数値入力をスキップして全額全賭け（無限ループを完全回避）
+                return "raise", p.chips
+                
+            # 【UI表現の改善】文言をベット額(総額)か上乗せ額かで分岐
+            if highest_bet == 0:
+                print(f"ベットする【総額】を指定してください ({min_input} 〜 {max_input}pt)")
+            else:
+                print(f"現在のBet({p.round_bet}pt)に【追加上乗せ】する額を指定してください ({min_input} 〜 {max_input}pt)")
+                
+            while True:
+                try:
+                    raise_val = int(self.safe_input("金額入力: "))
+                    if min_input <= raise_val <= max_input: break
+                    print("範囲外です。")
+                except ValueError: print("数字を入力してください。")
+            return "raise", raise_val
+        return "fold", 0
+
+    def handle_cpu_action(self, p, to_call, can_raise):
+        to_call_bb = to_call / self.rules.BB
+        cpu_chips_bb = p.chips / self.rules.BB
+        
+        cpu_act, cpu_val_pt = cpu_decision(p.hand, self.board, to_call_bb, cpu_chips_bb)
+        
+        # 再レイズ権が止められている場合はコールへ強制ダウングレード
+        if cpu_act == 2 and not can_raise: 
+            cpu_act = 1
+        if cpu_act == 2 and p.chips <= to_call: 
+            cpu_act = 1
+        
+        if cpu_act == 1:
+            return "call", min(to_call, p.chips)
+        elif cpu_act == 2:
+            return "raise", min(max(to_call + self.rules.MIN_RAISE_INCREMENT, int(cpu_val_pt * self.rules.BB)), p.chips)
+        return "fold", 0
+
+    def apply_action(self, p, action_type, amount, highest_bet, min_raise_increment):
+        if action_type == "call":
+            p.chips -= amount
+            p.round_bet += amount
+            p.game_bet += amount
+            if p.chips == 0: p.status = HandStatus.ALL_IN
+            self.add_log(f"{p.name}: {'チェック' if amount == 0 else f'{amount}ptでコール'}{'（All-in!）' if p.chips==0 else ''}")
+            p.acted = True
+            return highest_bet, min_raise_increment
+
+        elif action_type == "raise":
+            p.chips -= amount
+            p.round_bet += amount
+            p.game_bet += amount
+            
+            actual_increment = p.round_bet - highest_bet
+            action_title = "ベット" if highest_bet == 0 else "レイズ"
+            highest_bet = p.round_bet
+            
+            if actual_increment >= min_raise_increment:
+                min_raise_increment = actual_increment
+                for pl in self.players:
+                    if pl.id != p.id and pl.status == HandStatus.PLAYING:
+                        pl.acted = False  # 正規レイズのみ全員の再レイズ権を開放
+                        
+            if p.chips == 0: p.status = HandStatus.ALL_IN
+            self.add_log(f"{p.name}: 合計{p.round_bet}ptに{action_title}!{'（All-in!）' if p.chips==0 else ''}")
+            p.acted = True
+            return highest_bet, min_raise_increment
+
+        elif action_type == "fold":
+            p.status = HandStatus.FOLDED
+            p.acted = True
+            self.add_log(f"{p.name}: フォールド")
+            return highest_bet, min_raise_increment
 
     def run_betting_round(self, round_name):
         self.action_logs.clear()
-        
-        for p in self.players:
-            p.reset_for_new_round()
-
+        for p in self.players: p.reset_for_new_round()
         if round_name == "プリフロップ":
-            for p in self.players:
-                p.round_bet = p.game_bet  
+            for p in self.players: p.round_bet = p.game_bet  
 
-        def count_active(): return sum(1 for p in self.players if p.active)
-        def count_playable(): return sum(1 for p in self.players if p.is_playable())
+        def count_playable(): return sum(1 for p in self.players if p.can_make_action())
+        def count_alive(): return sum(1 for p in self.players if p.is_active_in_hand())
 
-        num_players = len(self.players)
-        start_offset = (3 if num_players > 2 else 1) if round_name == "プリフロップ" else 1
-        current_pos = (self.dealer_idx + start_offset) % num_players
+        # 【バグ2の完全修正】脱落者を完全に排除した「現在生存アクターリスト」ベースでの順序制御
+        active_p_list = [p for p in self.players if not p.is_busted]
+        num_active = len(active_p_list)
         
-        # 【指摘4・5への対策】ポーカーの正規レイズルール構造の導入
+        # ディーラーが生存者リストのどこにいるかを検索
+        dealer_active_idx = next(i for i, p in enumerate(active_p_list) if p.id == self.dealer_idx)
+        
+        if num_active == 2:
+            # ヘッズアップ（2人）ルールの完全適用
+            if round_name == "プリフロップ":
+                list_cursor = dealer_active_idx  # プリフロップはSB（ディーラー）が先手
+            else:
+                list_cursor = (dealer_active_idx + 1) % num_active # フロップ以降はBBが先手
+        else:
+            # マルチプレイヤー（3人以上）ルール
+            start_offset = 3 if round_name == "プリフロップ" else 1
+            list_cursor = (dealer_active_idx + start_offset) % num_active
+
         highest_bet = max(p.round_bet for p in self.players)
-        min_raise_increment = 20  # 最低必要な「上乗せ額」の履歴を保持
+        min_raise_increment = self.rules.MIN_RAISE_INCREMENT
 
         while True:
-            if count_active() <= 1 or count_playable() == 0: break
+            if count_alive() <= 1 or count_playable() == 0: break
             
             all_settled = True
             for p in self.players:
-                if p.active and p.is_playable():
+                if p.can_make_action():
                     if not p.acted or p.round_bet != highest_bet:
                         all_settled = False
             if all_settled: break
 
-            p = self.players[current_pos]
-            if not p.active or p.chips == 0:
-                current_pos = (current_pos + 1) % num_players
+            p = active_p_list[list_cursor]
+            if not p.can_make_action():
+                list_cursor = (list_cursor + 1) % num_active
                 continue
 
             to_call = highest_bet - p.round_bet
+            
+            # 【バグ3の完全修正】不完全オールイン時の「再レイズ権利の剥奪」ロジック
+            # すでに一度意思表明(acted=True)しており、かつコール要求額が残っている（＝不完全オールインで中途半端に釣り上げられた）場合はレイズ不可
+            can_raise = True
+            if p.acted and to_call > 0:
+                can_raise = False
+
             self.draw_ui(round_name)
 
-            # --- 人間の行動 ---
             if p.is_human:
-                print(f"【あなたの番】 所持: {p.chips} | コールに必要な額: {to_call}")
-                print(f"あなたの手札:  {p.hand[0]} {p.hand[1]}")
-                
-                while True:
-                    action = self.safe_input("アクション（1:コール/チェック, 2:ベット/レイズ, 3:フォールド）: ").strip()
-                    if action in ["1", "2", "3"]: break
-                    print("1, 2, 3 のいずれかを入力してください。")
-
-                if action == "1":
-                    call_amnt = min(to_call, p.chips)
-                    p.chips -= call_amnt
-                    p.round_bet += call_amnt
-                    p.game_bet += call_amnt
-                    self.add_log(f"あなた: {'チェック' if call_amnt == 0 else f'{call_amnt}でコール'}{'（All-in!）' if p.chips==0 else ''}")
-                    p.acted = True
-                    
-                elif action == "2":
-                    action_title = "ベット" if highest_bet == 0 else "レイズ"
-                    min_needed = highest_bet + min_raise_increment
-                    min_input = min_needed - p.round_bet
-                    max_input = p.chips
-
-                    if max_input <= to_call:
-                        self.safe_input("チップが足りないためレイズできません。[Enter]で戻る")
-                        continue
-
-                    print(f"追加額を指定してください ({min_input} 〜 {max_input})")
-                    while True:
-                        try:
-                            raise_val = int(self.safe_input(f"追加額: "))
-                            if min_input <= raise_val <= max_input: break
-                            print("範囲外です。")
-                        except ValueError: print("数字を入力してください。")
-
-                    p.chips -= raise_val
-                    p.round_bet += raise_val
-                    p.game_bet += raise_val
-                    
-                    # レイザー本人の出した正味の上乗せ額
-                    actual_increment = p.round_bet - highest_bet
-                    highest_bet = p.round_bet
-                    
-                    # 【指摘4・5の解決】正規の額以上でのレイズのみ、ミニマムインクリメントを更新し、他者の権利をリセットする
-                    if actual_increment >= min_raise_increment:
-                        min_raise_increment = actual_increment
-                        for pl in self.players: 
-                            if pl.id != p.id: pl.acted = False
-                    
-                    self.add_log(f"あなた: 合計{p.round_bet}に{action_title}!決死のAll-in!" if p.chips==0 else f"あなた: 合計{p.round_bet}に{action_title}!")
-                    p.acted = True
-
-                elif action == "3":
-                    self.add_log("あなた: フォールド")
-                    p.active = False
-                    p.acted = True
-
-            # --- CPUの行動 ---
+                act_type, act_val = self.handle_human_action(p, to_call, highest_bet, min_raise_increment, can_raise)
             else:
-                cpu_act, cpu_val = cpu_decision(p.hand, self.board, to_call, p.chips)
-                if cpu_act == 2 and p.chips <= to_call: cpu_act = 1
+                act_type, act_val = self.handle_cpu_action(p, to_call, can_raise)
 
-                if cpu_act == 1:
-                    call_amnt = min(to_call, p.chips)
-                    p.chips -= call_amnt
-                    p.round_bet += call_amnt
-                    p.game_bet += call_amnt
-                    self.add_log(f"{p.name}: {'チェック' if call_amnt == 0 else f'{call_amnt}でコール'}{'（All-in!）' if p.chips==0 else ''}")
-                    p.acted = True
-                    
-                elif cpu_act == 2:
-                    action_title = "ベット" if highest_bet == 0 else "レイズ"
-                    min_needed = highest_bet + min_raise_increment
-                    actual_add = min(max(min_needed - p.round_bet, cpu_val), p.chips)
+            highest_bet, min_raise_increment = self.apply_action(p, act_type, act_val, highest_bet, min_raise_increment)
+            list_cursor = (list_cursor + 1) % num_active
 
-                    p.chips -= actual_add
-                    p.round_bet += actual_add
-                    p.game_bet += actual_add
-                    
-                    actual_increment = p.round_bet - highest_bet
-                    highest_bet = p.round_bet
-                    
-                    # 【指摘4の解決】チップ不足による「不完全なオールイン・レイズ」の場合、他者の再レイズ権を復活させない
-                    if actual_increment >= min_raise_increment:
-                        min_raise_increment = actual_increment
-                        for pl in self.players: 
-                            if pl.id != p.id: pl.acted = False
-                            
-                    self.add_log(f"{p.name}: 合計{p.round_bet}に{action_title}{'（All-in!）' if p.chips==0 else ''}")
-                    p.acted = True
-
-                elif cpu_act == 3:
-                    self.add_log(f"{p.name}: フォールド")
-                    p.active = False
-                    p.acted = True
-
-            current_pos = (current_pos + 1) % num_players
-
-
-    def resolve_showdown(self):
-        print("\n" + "=" * 70)
-        print(" 🔥 [LOG] ショーダウン & 結果発表 🔥")
-        print("=" * 70)
-        
-        showdown_players = [p for p in self.players if p.active]
-        for p in showdown_players:
-            score, name = evaluate_7_cards(p.hand + self.board)
-            p.score = score
-            p.hand_name = name
-            print(f" 🃏 {p.name:<6}: {p.hand[0]} {p.hand[1]} -> 【{name}】")
-
-        if showdown_players:
-            overall_max_score = max(p.score for p in showdown_players)
-            best_hands = [p for p in showdown_players if p.score == overall_max_score]
-            print("----------------------------------------------------------------------")
-            if len(best_hands) == 1:
-                print(f" 🏆 勝者: {best_hands[0].name} !! ({best_hands[0].hand_name})")
-            else:
-                winner_names = " と ".join(w.name for w in best_hands)
-                print(f" 🤝 引き分け: {winner_names} ({best_hands[0].hand_name})")
-        print("======================================================================\n")
-
-        has_all_in_showdown = any(p.is_all_in() for p in self.players)
-
-        # 【指摘6の検証】階層型サイドポット計算ロジック（最新版で完全に機能中）
-        if not has_all_in_showdown:
-            total_pot = sum(p.game_bet for p in self.players)
-            if total_pot > 0 and showdown_players:
-                max_score = max(p.score for p in showdown_players)
-                winners = [p for p in showdown_players if p.score == max_score]
-                share = total_pot // len(winners)
-                remainder = total_pot % len(winners)
-                
-                for i, w in enumerate(winners):
-                    bonus = 1 if i < remainder else 0
-                    w.chips += (share + bonus)
-                    print(f" 💰 【計算ログ】メインポット(総額:{total_pot}) から {w.name} へ {share + bonus} チップ分配")
-            return
-
-        all_bets = sorted(list(set(p.game_bet for p in self.players if p.game_bet > 0)))
-        previous_level = 0
-        
-        for level in all_bets:
-            layer_pot = 0
-            eligible_players = []
-            
-            for p in self.players:
-                if p.game_bet >= level:
-                    layer_pot += (level - previous_level)
-                    if p.active: eligible_players.append(p)
-                else:
-                    contribution = p.game_bet - previous_level
-                    if contribution > 0: layer_pot += contribution
-            
-            if layer_pot == 0: continue
-            if not eligible_players:
-                survivors = [p for p in self.players if p.active]
-                if survivors: eligible_players = survivors
-                else: break
-
-            if eligible_players:
-                max_score = max(p.score for p in eligible_players)
-                winners = [p for p in eligible_players if p.score == max_score]
-                share = layer_pot // len(winners)
-                remainder = layer_pot % len(winners)
-                
-                for i, w in enumerate(winners):
-                    bonus = 1 if i < remainder else 0
-                    w.chips += (share + bonus)
-                    pot_name = "メインポット" if previous_level == 0 else "サイドポット"
-                    print(f" 💰 【計算ログ】{pot_name}(総額:{layer_pot}) から {w.name} へ {share + bonus} チップ分配")
-                    
-            previous_level = level
 
     def start_game_loop(self):
         print("=========================================")
@@ -500,17 +528,15 @@ class TexasHoldemGame:
         for i in range(1, num_p):
             self.players.append(Player(i, f"CPU {i}", chips=1000, is_human=False))
 
-        # 【指摘10への対策】開始時の総チップ量を完全ロック
-        self.total_initial_chips = len(self.players) * 1000
         games_count = 0
 
         while True:
-            active_list = [p for p in self.players if p.chips > 0]
+            living_players = [p for p in self.players if not p.is_busted]
             
-            if not any(p.is_human for p in active_list):
+            if not any(p.is_human for p in living_players):
                 print("\nあなたの所持チップがなくなりました。ゲームオーバー！")
                 break
-            if len(active_list) == 1 and active_list[0].is_human:
+            if len(living_players) == 1 and living_players[0].is_human:
                 print("\nあなた以外の全員を破産させました！完全勝利です！！")
                 break
 
@@ -520,68 +546,87 @@ class TexasHoldemGame:
             self.board.clear()
             self.deck = Deck()
 
-            for p in self.players:
-                p.reset_for_new_game()
+            for p in self.players: p.reset_for_new_game()
 
             while True:
                 self.dealer_idx = (self.dealer_idx + 1) % len(self.players)
-                if self.players[self.dealer_idx].chips > 0: break
+                if not self.players[self.dealer_idx].is_busted: break
             
-            idx_in_actives = active_list.index(self.players[self.dealer_idx])
-            if len(active_list) == 2: 
-                sb_p = active_list[idx_in_actives]
-                bb_p = active_list[(idx_in_actives + 1) % len(active_list)]
+            idx_in_actives = living_players.index(self.players[self.dealer_idx])
+            if len(living_players) == 2: 
+                sb_p = living_players[idx_in_actives]
+                bb_p = living_players[(idx_in_actives + 1) % len(living_players)]
             else:
-                sb_p = active_list[(idx_in_actives + 1) % len(active_list)]
-                bb_p = active_list[(idx_in_actives + 2) % len(active_list)]
+                sb_p = living_players[(idx_in_actives + 1) % len(living_players)]
+                bb_p = living_players[(idx_in_actives + 2) % len(living_players)]
 
-            sb_amnt = min(10, sb_p.chips)
-            bb_amnt = min(20, bb_p.chips)
+            sb_amnt = min(self.rules.SB, sb_p.chips)
+            bb_amnt = min(self.rules.BB, bb_p.chips)
+            
             sb_p.chips -= sb_amnt
             sb_p.game_bet += sb_amnt
+            if sb_p.chips == 0: sb_p.status = HandStatus.ALL_IN
+            
             bb_p.chips -= bb_amnt
             bb_p.game_bet += bb_amnt
+            if bb_p.chips == 0: bb_p.status = HandStatus.ALL_IN
 
-            print(f" 📢 【システム】{sb_p.name} がSB({sb_amnt})を支払いました。")
-            print(f" 📢 【システム】{bb_p.name} がBB({bb_amnt})を支払いました。")
+            print(f" 📢 【システム】{sb_p.name} がSB({sb_amnt}pt)を支払いました。")
+            print(f" 📢 【システム】{bb_p.name} がBB({bb_amnt}pt)を支払いました。")
 
-            # 【指摘10】ラウンド開始前のチップ整合性チェック
-            self.verify_chip_integrity(f"第{games_count}戦・開始時")
+            self.verify_chip_integrity(f"第{games_count}戦・カード配布前")
 
-            for p in active_list:
+            for p in living_players:
                 p.hand = self.deck.draw(2)
                 if self.debug_mode and not p.is_human:
-                    print(f" [DEBUG] {p.name} の配られた手札: {p.hand[0]}{p.hand[1]}")
+                    print(f" [DEBUG] {p.name} の手札: {p.hand[0]}{p.hand[1]}")
 
-            self.run_betting_round("プリフロップ")
+            self.run_betting_round("プリロップ")
 
             for phase in ["フロップ", "ターン", "リバー"]:
-                if sum(1 for p in self.players if p.active) > 1 and sum(1 for p in self.players if p.is_playable()) >= 1:
+                alive_count = sum(1 for p in self.players if p.status == HandStatus.PLAYING)
+                playable_count = sum(1 for p in self.players if p.can_make_action())
+                
+                if alive_count + sum(1 for p in self.players if p.status == HandStatus.ALL_IN) > 1 and playable_count >= 1:
                     self.board.extend(self.deck.draw(3 if phase == "フロップ" else 1))
                     self.run_betting_round(phase)
 
-            if sum(1 for p in self.players if p.active) == 1:
-                winner = next(p for p in self.players if p.active)
+            survivors = [p for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted]
+            
+            if len(survivors) == 1:
+                winner = survivors[0]
                 total_pot = sum(p.game_bet for p in self.players)
                 winner.chips += total_pot
-                print(f"\n 全員がフォールドしたため、{winner.name} の不戦勝です！\n 💰 {total_pot} チップを獲得。")
+                print(f"\n全員がフォールドしたため、{winner.name} の不戦勝です！\n 💰 {total_pot}pt を獲得。")
             else:
-                self.resolve_showdown()
+                print("\n" + "=" * 70)
+                print(" 🔥 [LOG] ショーダウン結果発表 🔥")
+                print("=" * 70)
+                for p in survivors:
+                    score, name = evaluate_7_cards(p.hand + self.board)
+                    p.score = score
+                    p.hand_name = name
+                    print(f" 🃏 {p.name:<6}: {p.hand[0]} {p.hand[1]} -> 【{name}】")
+                print("----------------------------------------------------------------------")
+                
+                distribution_logs = self.pot_manager.distribute_pots(self.players)
+                for log in distribution_logs:
+                    print(log)
+                print("======================================================================\n")
 
-            # 【指摘10】チップ分配完了後の整合性チェック
-            self.verify_chip_integrity(f"第{games_count}戦・分配完了直後")
+            self.verify_chip_integrity(f"第{games_count}戦・配当完了後")
 
-            for p in active_list:
-                if p.chips <= 0:
-                    print(f"📢 【アナウンス】{p.name} が破産（トビ）しました。")
+            for p in living_players:
+                if p.chips <= 0 and not p.is_busted:
+                    p.is_busted = True
+                    print(f"📢 【アナウンス】{p.name} が完全に破産（トビ）しました。")
 
-            active_list_next = [p for p in self.players if p.chips > 0]
-            if not any(p.is_human for p in active_list_next) or (len(active_list_next) == 1 and active_list_next[0].is_human):
+            next_living = [p for p in self.players if not p.is_busted]
+            if not any(p.is_human for p in next_living) or (len(next_living) == 1 and next_living[0].is_human):
                 continue
 
             cmd = self.safe_input("\n--- [Enter] で次のゲームへ / (q)で終了 --- ").strip().lower()
-            if cmd == 'q':
-                break
+            if cmd == 'q': break
 
 
 if __name__ == "__main__":
