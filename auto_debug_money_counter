@@ -1,0 +1,210 @@
+import sys
+import random
+# super_main.py からクラスや関数をインポート
+from super_main import TexasHoldemGame, Player, HandStatus
+
+class AutoDebugGame(TexasHoldemGame):
+    def __init__(self):
+        super().__init__()
+        self.action_logs = []
+
+    def handle_human_action(self, p, to_call, highest_bet, min_raise_increment, can_raise):
+        choices = ["1", "3"]
+        if can_raise:
+            min_needed = highest_bet + min_raise_increment
+            min_input = min_needed - p.round_bet
+            if min_input <= p.chips:
+                choices.append("2")
+        
+        action = random.choice(choices)
+        if action == "1":
+            return "call", min(to_call, p.chips)
+        elif action == "2":
+            min_needed = highest_bet + min_raise_increment
+            min_input = min_needed - p.round_bet
+            max_input = p.chips
+            raise_val = random.randint(min_input, max_input)
+            return "raise", raise_val
+        return "fold", 0
+
+    def draw_ui(self, round_name):
+        pass
+
+    def safe_input(self, prompt):
+        if "人数" in prompt: return "4"
+        if "デバッグモード" in prompt: return "n"
+        if "次のゲームへ" in prompt: return "" 
+        return ""
+
+    def dump_investigation_report(self, context_label):
+        print("\n" + "!" * 60)
+        print(f"🚨 【詳細捜査レポート】 エラー発生時の全データ状況 ({context_label})")
+        print("!" * 60)
+        print(f"現在のディーラー(D)のインデックス: {self.dealer_idx}")
+        print("-" * 60)
+        
+        total_chips = 0
+        total_bets = 0
+        
+        for p in self.players:
+            status_str = f"BUSTED={p.is_busted}, Status={p.status.name}"
+            print(f"👤 {p.name:<12} | 手元チップ: {p.chips:>4}pt | 場へのBet: {p.game_bet:>3}pt | ({status_str})")
+            total_chips += p.chips
+            total_bets += p.game_bet
+            
+        print("-" * 60)
+        print(f"   ▶ 全員の『手元チップ』の合計: {total_chips}pt")
+        print(f"   ▶ 全員の『場へのBet』の合計 : {total_bets}pt")
+        print(f"   💵 【総合計（実測値）】     : {total_chips + total_bets}pt (本来は 4000pt であるべき)")
+        print("!" * 60 + "\n")
+
+
+def run_auto_test(total_games=100000): # 👈 10万回へ
+    print(f"🔥 AIによる超ハイパー自動デバッグテスト（{total_games}回耐久）を開始します...")
+    print("※ 1,000試合ごとに生存報告を行います。バグが潜んでいれば途中で確実に大爆発します。")
+    print("-" * 60)
+    
+    game = AutoDebugGame()
+    
+    game.players.append(Player(0, "テストあなた", chips=1000, is_human=True))
+    for i in range(1, 4):
+        game.players.append(Player(i, f"CPU {i}", chips=1000, is_human=False))
+        
+    success_count = 0
+    game.rules = game.rules 
+    game.dealer_idx = -1
+
+    try:
+        for game_num in range(1, total_games + 1):
+            
+            # --- 1. トビ・復活処理 ---
+            for p in game.players:
+                if p.chips <= 0 and not p.is_busted:
+                    p.chips = 0
+                    p.is_busted = True
+                    p.status = HandStatus.FOLDED
+
+            living_players = [p for p in game.players if not p.is_busted]
+            
+            if len(living_players) <= 1 or not any(p.is_human for p in living_players):
+                for p in game.players:
+                    p.chips = 1000
+                    p.is_busted = False
+                living_players = [p for p in game.players]
+
+            # --- 2. 新ゲームのセットアップ ---
+            game.board.clear()
+            game.deck = game.deck.__class__() if game.deck else None 
+            
+            for p in game.players: 
+                p.reset_for_new_game()
+                if p.chips <= 0:
+                    p.is_busted = True
+                    p.status = HandStatus.FOLDED
+
+            living_players = [p for p in game.players if not p.is_busted]
+
+            # ディーラー決定
+            if game.dealer_idx == -1:
+                idx_in_actives = 0
+            else:
+                last_d_candidates = [p for p in game.players if p.id == game.dealer_idx]
+                if last_d_candidates and last_d_candidates[0] in living_players:
+                    idx_in_actives = (living_players.index(last_d_candidates[0]) + 1) % len(living_players)
+                else:
+                    idx_in_actives = 0 % len(living_players)
+            
+            game.dealer_idx = living_players[idx_in_actives].id
+            num_living = len(living_players)
+
+            if num_living == 2: 
+                sb_p = living_players[idx_in_actives]
+                bb_p = living_players[(idx_in_actives + 1) % num_living]
+            else:
+                sb_p = living_players[(idx_in_actives + 1) % num_living]
+                bb_p = living_players[(idx_in_actives + 2) % num_living]
+
+            # --- 3. ブラインド徴収 ---
+            sb_amnt = min(game.rules.SB, sb_p.chips)
+            sb_p.chips -= sb_amnt
+            sb_p.round_bet = sb_amnt 
+            sb_p.game_bet = sb_amnt  
+            if sb_p.chips == 0: 
+                sb_p.status = HandStatus.ALL_IN if sb_amnt > 0 else HandStatus.FOLDED
+                sb_p.acted = True 
+
+            bb_amnt = min(game.rules.BB, bb_p.chips)
+            bb_p.chips -= bb_amnt
+            bb_p.round_bet = bb_amnt 
+            bb_p.game_bet = bb_amnt  
+            if bb_p.chips == 0: 
+                bb_p.status = HandStatus.ALL_IN if bb_amnt > 0 else HandStatus.FOLDED
+                bb_p.acted = True 
+
+            # 🛑 監査：Preflop
+            try:
+                game.verify_chip_integrity(f"Game {game_num} Preflop")
+            except AssertionError as e:
+                game.dump_investigation_report(f"Game {game_num} Preflop")
+                raise e
+
+            # --- 4. ゲーム進行 ---
+            from super_main import Deck
+            game.deck = Deck()
+
+            for p in living_players:
+                if p.status == HandStatus.FOLDED: continue
+                p.hand = game.deck.draw(2)
+
+            game.run_betting_round("プリフロップ")
+
+            for phase in ["フロップ", "ターン", "リバー"]:
+                survivors_count = sum(1 for p in game.players if p.status != HandStatus.FOLDED and not p.is_busted)
+                if survivors_count > 1:
+                    if (phase == "フロップ" and len(game.board) < 3) or (phase in ["ターン", "リバー"] and len(game.board) < 5):
+                        game.board.extend(game.deck.draw(3 if phase == "フロップ" else 1))
+                    
+                    if sum(1 for p in game.players if p.can_make_action()) >= 2:
+                        game.run_betting_round(phase)
+
+            # --- 5. ショーダウン & 配当処理 ---
+            survivors = [p for p in game.players if p.status != HandStatus.FOLDED and not p.is_busted]
+            
+            if len(survivors) == 1:
+                winner = survivors[0]
+                total_pot = sum(p.game_bet for p in game.players)
+                winner.chips += total_pot
+                for p in game.players: p.game_bet = 0
+            else:
+                for p in survivors:
+                    from super_main import evaluate_7_cards
+                    p.score, p.hand_name = evaluate_7_cards(p.hand + game.board)
+                game.pot_manager.distribute_pots(game.players)
+                for p in game.players: p.game_bet = 0
+
+            for p in living_players:
+                if p.chips <= 0 and not p.is_busted:
+                    p.chips = 0
+                    p.is_busted = True
+
+            # 🛑 監査：End
+            try:
+                game.verify_chip_integrity(f"Game {game_num} End")
+            except AssertionError as e:
+                game.dump_investigation_report(f"Game {game_num} End")
+                raise e
+            
+            success_count = game_num
+            # 1,000回ごとに進捗を出力（画面を汚さない設計）
+            if game_num % 1000 == 0:
+                print(f" 🔄 {game_num:,} 試合クリア...（チップ総数 4,000pt 健全）")
+
+        print(f"\n🎉 【完全勝利】 驚異の {success_count:,} 試合トラブルなし！プログラムは神の領域に達しました。")
+
+    except AssertionError:
+        pass 
+    except Exception as e:
+        print(f"\n❌ 予期せぬ致命的なクラッシュが発生しました: {e}")
+
+if __name__ == "__main__":
+    run_auto_test(100000)
