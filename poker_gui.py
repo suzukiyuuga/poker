@@ -97,8 +97,8 @@ class TexasHoldemGUI:
         self.control_panel = tk.Frame(self.main_container, bg="#123026", bd=3, relief="ridge")
 
         # 3. 下部ログエリア（レイアウト崩れ対策版）
-        self.log_frame = tk.Frame(self.root, bg="#0d241c", width=950, height=350)
-        self.log_frame.grid(row=2, column=0, sticky="nsew", pady=(2, 0))
+        self.log_frame = tk.Frame(self.root, bg="#0d241c", width=950, height=0)
+        #self.log_frame.grid(row=2, column=0, sticky="nsew", pady=(2, 0))
         self.log_frame.pack_propagate(False)
 
         self.scrollbar = tk.Scrollbar(self.log_frame)
@@ -153,6 +153,25 @@ class TexasHoldemGUI:
         self.show_loading_delay = False
         self.chip_flow_text = "初期設定を行ってください"
         
+        # --- 【追加・変更箇所】ここからログのクリア処理 ---
+        # 1. メイン画面のログテキストエリアをクリア
+        self.log_text.config(state="normal")
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.config(state="disabled")
+
+        # 2. ポップアップ掲示板側にもクリア用のメソッドがあれば呼び出す
+        # (もし BoardPopup クラスに clear() や clear_message() のようなメソッドがあれば以下のように呼び出せます)
+        if hasattr(self.board_popup, 'clear'):
+            self.board_popup.clear()
+        elif hasattr(self.board_popup, 'log_text'):  # 内部構造が同じTextウィジェットの場合の予備
+            try:
+                self.board_popup.log_text.config(state="normal")
+                self.board_popup.log_text.delete("1.0", tk.END)
+                self.board_popup.log_text.config(state="disabled")
+            except:
+                pass
+        # --- 【追加・変更箇所】ここまで ---
+
         self.game = None
         self.game_thread = None
         
