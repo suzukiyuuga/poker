@@ -15,9 +15,9 @@ RANK_VALUES = {r: i + 2 for i, r in enumerate(RANKS)}
 VALUE_TO_RANK = {v: r for r, v in RANK_VALUES.items()}
 
 class HandStatus(Enum):
-    PLAYING = auto()  # ハンドに参戦中
-    FOLDED = auto()   # フォールドした
-    ALL_IN = auto()   # オールインしている
+    PLAYING = auto()  
+    FOLDED = auto()   
+    ALL_IN = auto()   
 
 class GameStructure:
     def __init__(self, sb=10, bb=20, min_raise_inc=20):
@@ -78,6 +78,8 @@ class Player:
         self.round_bet = 0
         if self.status == HandStatus.PLAYING:
             self.acted = False
+        elif self.status == HandStatus.ALL_IN:
+            self.acted = True
 
     def reset_for_new_game(self):
         self.hand = []
@@ -87,20 +89,22 @@ class Player:
         self.score = (-1,)
         self.hand_name = ""
         if self.chips <= 0:
+            self.chips = 0
             self.is_busted = True
             self.status = HandStatus.FOLDED
         else:
-            self.status = HandStatus.PLAYING
+            if not self.is_busted:
+                self.status = HandStatus.PLAYING
 
     def is_active_in_hand(self):
         return (not self.is_busted) and (self.status != HandStatus.FOLDED)
 
     def can_make_action(self):
-        return self.is_active_in_hand() and (self.status != HandStatus.ALL_IN)
+        return self.is_active_in_hand() and (self.status == HandStatus.PLAYING)
 
 
 # =====================================================================
-# [SECTION 3] ポーカー会計システム
+# [SECTION 3] ポーカー会計システム（サイドポット完全保証版）
 # =====================================================================
 class SidePot:
     def __init__(self, amount=0):
@@ -114,6 +118,8 @@ class PotManager:
 
     def build_pots(self, players):
         self.pots.clear()
+        
+        # チップを場に出したすべてのプレイヤーのベット額の階層リストを作成
         active_bets = sorted(list(set(p.game_bet for p in players if p.game_bet > 0)))
         previous_level = 0
         
@@ -122,17 +128,21 @@ class PotManager:
             pot_chips = 0
             
             for p in players:
+                # プレイヤーがこの階層以上のベットを行っている場合
                 if p.game_bet >= level:
                     pot_chips += (level - previous_level)
+                    # 該当階層への権利があり、かつフォールドもトビもしていないプレイヤーを受給資格者とする
                     if p.status != HandStatus.FOLDED and not p.is_busted:
                         current_pot.eligible_player_ids.append(p.id)
                 else:
+                    # この階層未満しか出していない場合、出せる全額を回収
                     contribution = p.game_bet - previous_level
                     if contribution > 0:
                         pot_chips += contribution
             
             if pot_chips > 0:
                 current_pot.amount = pot_chips
+                # 万が一、このポットへの出資者が全員フォールド等で消えていた場合、生存者全員を救済対象にする
                 if not current_pot.eligible_player_ids:
                     current_pot.eligible_player_ids = [pl.id for pl in players if pl.status != HandStatus.FOLDED and not pl.is_busted]
                 self.pots.append(current_pot)
@@ -144,22 +154,39 @@ class PotManager:
         self.build_pots(players)
         player_dict = {p.id: p for p in players}
         
+        showdown_survivors = [p for p in players if p.status != HandStatus.FOLDED and not p.is_busted]
+        
         for idx, pot in enumerate(self.pots):
-            if pot.amount == 0 or not pot.eligible_player_ids:
+            if pot.amount == 0:
                 continue
                 
-            eligible_players = [player_dict[pid] for pid in pot.eligible_player_ids]
-            max_score = max(p.score for p in eligible_players)
-            winners = [p for p in eligible_players if p.score == max_score]
+            eligible_winners = [player_dict[pid] for pid in pot.eligible_player_ids if player_dict[pid].status != HandStatus.FOLDED and not player_dict[pid].is_busted]
+            
+            # 受給資格者が全滅している場合は、ショーダウン生存者（それもいなければ破産していない全員）で分ける
+            if not eligible_winners:
+                eligible_winners = showdown_survivors if showdown_survivors else [p for p in players if not p.is_busted]
+            
+            max_score = max(p.score for p in eligible_winners)
+            winners = [p for p in eligible_winners if p.score == max_score]
             
             share = pot.amount // len(winners)
             remainder = pot.amount % len(winners)
             
             pot_label = "メインポット" if idx == 0 else f"サイドポット [{idx}]"
+            
+            distributed_sum = 0
             for i, w in enumerate(winners):
                 bonus = 1 if i < remainder else 0
-                w.chips += (share + bonus)
-                log_messages.append(f" 💰 【会計ログ】{pot_label}(総額:{pot.amount}) から {w.name} へ {share + bonus}pt 分配しました。")
+                exact_payout = share + bonus
+                w.chips += exact_payout
+                distributed_sum += exact_payout
+                log_messages.append(f" 💰 【会計ログ】{pot_label}(総額:{pot.amount}) から {w.name} へ {exact_payout}pt 分配しました。")
+            
+            # 割り切れなかった絶対的な端数はリストの先頭の勝者に集約
+            if distributed_sum != pot.amount:
+                diff = pot.amount - distributed_sum
+                winners[0].chips += diff
+                log_messages.append(f" 💰 【会計ログ端数調整】誤差 {diff}pt を {winners[0].name} に集約しました。")
                 
         return log_messages
 
@@ -336,7 +363,7 @@ class TexasHoldemGame:
 
     def handle_human_action(self, p, to_call, highest_bet, min_raise_increment, can_raise):
         call_label = "チェック" if to_call == 0 else f"{to_call}ptでコール"
-        print(f"【あなたの番】 所持: {p.chips}pt | アクションに必要な額: {call_label}")
+        print(f"【あなたの番】 所限: {p.chips}pt | アクションに必要な額: {call_label}")
         print(f"あなたの手札:  {p.hand[0]} {p.hand[1]}")
         
         raise_label = "ベット" if highest_bet == 0 else "レイズ"
@@ -448,8 +475,9 @@ class TexasHoldemGame:
 
         active_p_list = [p for p in self.players if not p.is_busted]
         num_active = len(active_p_list)
+        if num_active == 0: return
         
-        dealer_active_idx = next(i for i, p in enumerate(active_p_list) if p.id == self.dealer_idx)
+        dealer_active_idx = next((i for i, p in enumerate(active_p_list) if p.id == self.dealer_idx), 0)
         
         if num_active == 2:
             if round_name == "プリフロップ":
@@ -517,6 +545,13 @@ class TexasHoldemGame:
         games_count = 0
 
         while True:
+            # 🛡️ 【絶対防衛線 1】ゲームのループ先頭で「チップを持たないプレイヤー」を確実に排除（即時破産処理）
+            for p in self.players:
+                if p.chips <= 0 and not p.is_busted:
+                    p.chips = 0
+                    p.is_busted = True
+                    p.status = HandStatus.FOLDED
+
             living_players = [p for p in self.players if not p.is_busted]
             
             if not any(p.is_human for p in living_players):
@@ -532,30 +567,51 @@ class TexasHoldemGame:
             self.board.clear()
             self.deck = Deck()
 
-            for p in self.players: p.reset_for_new_game()
-
-            while True:
-                self.dealer_idx = (self.dealer_idx + 1) % len(self.players)
-                if not self.players[self.dealer_idx].is_busted: break
+            # 🛡️ 【絶対防衛線 2】変数のクリーンリセット。ここでも0ptのプレイヤーが混ざる余地を完全に排除
+            for p in self.players: 
+                p.reset_for_new_game()
+                if p.chips <= 0:
+                    p.is_busted = True
+                    p.status = HandStatus.FOLDED
             
-            idx_in_actives = living_players.index(self.players[self.dealer_idx])
-            if len(living_players) == 2: 
-                sb_p = living_players[idx_in_actives]
-                bb_p = living_players[(idx_in_actives + 1) % len(living_players)]
+            living_players = [p for p in self.players if not p.is_busted]
+
+            if self.dealer_idx == -1:
+                idx_in_actives = 0
             else:
-                sb_p = living_players[(idx_in_actives + 1) % len(living_players)]
-                bb_p = living_players[(idx_in_actives + 2) % len(living_players)]
+                # 生存者の中から前回のディーラーの次の位置を正しく探す
+                last_d_candidates = [p for p in self.players if p.id == self.dealer_idx]
+                if last_d_candidates and last_d_candidates[0] in living_players:
+                    idx_in_actives = (living_players.index(last_d_candidates[0]) + 1) % len(living_players)
+                else:
+                    idx_in_actives = 0 % len(living_players)
+            
+            self.dealer_idx = living_players[idx_in_actives].id
+            num_living = len(living_players)
 
+            if num_living == 2: 
+                sb_p = living_players[idx_in_actives]
+                bb_p = living_players[(idx_in_actives + 1) % num_living]
+            else:
+                sb_p = living_players[(idx_in_actives + 1) % num_living]
+                bb_p = living_players[(idx_in_actives + 2) % num_living]
+
+            # 💡 ブラインド徴収。すでに上のフェーズでchips=0の人間は除外されているため、必ず最小でも1以上のチップから徴収が始まります。
             sb_amnt = min(self.rules.SB, sb_p.chips)
-            bb_amnt = min(self.rules.BB, bb_p.chips)
-            
             sb_p.chips -= sb_amnt
-            sb_p.game_bet += sb_amnt
-            if sb_p.chips == 0: sb_p.status = HandStatus.ALL_IN
-            
+            sb_p.round_bet = sb_amnt 
+            sb_p.game_bet = sb_amnt  
+            if sb_p.chips == 0: 
+                sb_p.status = HandStatus.ALL_IN if sb_amnt > 0 else HandStatus.FOLDED
+                sb_p.acted = True 
+
+            bb_amnt = min(self.rules.BB, bb_p.chips)
             bb_p.chips -= bb_amnt
-            bb_p.game_bet += bb_amnt
-            if bb_p.chips == 0: bb_p.status = HandStatus.ALL_IN
+            bb_p.round_bet = bb_amnt 
+            bb_p.game_bet = bb_amnt  
+            if bb_p.chips == 0: 
+                bb_p.status = HandStatus.ALL_IN if bb_amnt > 0 else HandStatus.FOLDED
+                bb_p.acted = True 
 
             print(f" 📢 【システム】{sb_p.name} がSB({sb_amnt}pt)を支払いました。")
             print(f" 📢 【システム】{bb_p.name} がBB({bb_amnt}pt)を支払いました。")
@@ -563,13 +619,14 @@ class TexasHoldemGame:
             self.verify_chip_integrity(f"第{games_count}戦・カード配布前")
 
             for p in living_players:
+                if p.status == HandStatus.FOLDED:
+                    continue
                 p.hand = self.deck.draw(2)
                 if self.debug_mode and not p.is_human:
                     print(f" [DEBUG] {p.name} の手札: {p.hand[0]}{p.hand[1]}")
 
             self.run_betting_round("プリフロップ")
 
-            # 【仕様修正】アクションできる人がいなくなっても、勝負中（降りていない）の人が複数いれば場札を最後まで引く
             for phase in ["フロップ", "ターン", "リバー"]:
                 survivors_count = sum(1 for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted)
                 
@@ -592,7 +649,6 @@ class TexasHoldemGame:
                 for p in self.players:
                     p.game_bet = 0
             else:
-                # 最終的なボード状態をUIで確認できるようにする
                 self.draw_ui("ショーダウン")
                 print("\n" + "=" * 70)
                 print(" 🔥 [LOG] ショーダウン結果発表 🔥")
@@ -609,16 +665,16 @@ class TexasHoldemGame:
                     print(log)
                 print("======================================================================\n")
                 
-                # 【会計監査バグ修正】ショーダウン配当完了後、全員のベット残高を正常にクリア
                 for p in self.players:
                     p.game_bet = 0
 
-            self.verify_chip_integrity(f"第{games_count}戦・配当完了後")
-
             for p in living_players:
                 if p.chips <= 0 and not p.is_busted:
+                    p.chips = 0
                     p.is_busted = True
                     print(f"📢 【アナウンス】{p.name} が完全に破産（トビ）しました。")
+
+            self.verify_chip_integrity(f"第{games_count}戦・配当完了後")
 
             next_living = [p for p in self.players if not p.is_busted]
             if not any(p.is_human for p in next_living) or (len(next_living) == 1 and next_living[0].is_human):

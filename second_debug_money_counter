@@ -1,0 +1,225 @@
+import sys
+import random
+from super_main import TexasHoldemGame, Player, HandStatus, Deck
+
+# =====================================================================
+# 🧠 実戦型・カオス思考AIクラス
+# =====================================================================
+class PracticalAIGame(TexasHoldemGame):
+    def __init__(self):
+        super().__init__()
+
+    def handle_human_action(self, p, to_call, highest_bet, min_raise_increment, can_raise):
+        """
+        あなたの代わりに動く、時たまオールインや仕掛けを行うAIロジック
+        """
+        # 1. チップが少なすぎるなら高確率でヤケクソオールイン
+        if p.chips <= self.rules.BB * 2 and p.chips > 0:
+            if random.random() < 0.7:
+                return "raise", p.chips
+
+        # 2. 基本アクションの選択肢
+        choices = ["call", "fold"]
+        
+        if can_raise:
+            min_needed = highest_bet + min_raise_increment
+            min_input = min_needed - p.round_bet
+            
+            if min_input <= p.chips:
+                choices.append("raise")
+                # 15%の確率で、前触れもなく残高全額の「狂気のオールイン」をブチ込む
+                if random.random() < 0.15:
+                    choices.append("absolute_allin")
+
+        action = random.choice(choices)
+
+        if action == "call":
+            return "call", min(to_call, p.chips)
+            
+        elif action == "raise":
+            min_needed = highest_bet + min_raise_increment
+            min_input = min_needed - p.round_bet
+            max_input = max(min_input, p.chips // 2)
+            
+            raise_val = random.randint(min_input, min(max_input, p.chips))
+            return "raise", raise_val
+            
+        elif action == "absolute_allin":
+            return "raise", p.chips
+            
+        return "fold", 0
+
+    # スピード重視のため、不要なUI表示と入力をスキップ
+    def draw_ui(self, round_name): pass
+    def safe_input(self, prompt):
+        if "人数" in prompt: return "4"
+        if "デバッグモード" in prompt: return "n"
+        return ""
+
+# =====================================================================
+# 🚀 100万回・実戦AI対戦マラソン本体
+# =====================================================================
+def run_stat_ai_marathon(total_games=1000000):
+    print("============================================================")
+    print(f"🕵️‍♂️ 究極・実戦型カオスAI対戦 ＆ 100万回お会計大監査")
+    print("============================================================")
+    print("※ 狂気AIたちが100万回レイズ・オールインを叫ぶ過酷な環境で、")
+    print("   毎ゲーム終了時のお会計（総額4000pt）を厳重にチェックします。")
+    print("-" * 60)
+
+    # 📊 戦績トラッカー
+    stats = {
+        "user_busted_opponents": 0,  # あなた（Player 0）が相手を破産させた回数
+        "user_got_busted": 0,         # あなた（Player 0）が破産させられた回数
+        "hand_counts": {},            # 役ごとの出現回数
+    }
+
+    game = PracticalAIGame()
+    
+    # 4人参戦（初期1000pt、計4000pt）
+    game.players.append(Player(0, "カオスAI_あなた", chips=1000, is_human=True))
+    for i in range(1, 4):
+        game.players.append(Player(i, f"狂気AI_CPU{i}", chips=1000, is_human=False))
+        
+    game.rules = game.rules
+    game.dealer_idx = -1
+
+    try:
+        for game_num in range(1, total_games + 1):
+            
+            # 生存状態の事前チェック用
+            pre_game_busted = [p.is_busted for p in game.players]
+
+            # 破産プレイヤーのリセット処理（全員トんだら復活）
+            for p in game.players:
+                if p.chips <= 0 and not p.is_busted:
+                    p.chips = 0
+                    p.is_busted = True
+                    p.status = HandStatus.FOLDED
+
+            living_players = [p for p in game.players if not p.is_busted]
+            if len(living_players) <= 1:
+                for p in game.players:
+                    p.chips = 1000
+                    p.is_busted = False
+                living_players = [p for p in game.players]
+                pre_game_busted = [False, False, False, False]
+
+            # --- 1試合の進行 ---
+            game.board.clear()
+            game.deck = Deck()
+            for p in game.players: 
+                p.reset_for_new_game()
+                if p.chips <= 0:
+                    p.is_busted = True
+                    p.status = HandStatus.FOLDED
+
+            living_players = [p for p in game.players if not p.is_busted]
+
+            # ディーラー・ブラインドの決定
+            while True:
+                game.dealer_idx = (game.dealer_idx + 1) % len(game.players)
+                if not game.players[game.dealer_idx].is_busted: break
+            
+            idx_in_actives = living_players.index(game.players[game.dealer_idx])
+            num_living = len(living_players)
+            if num_living == 2: 
+                sb_p = living_players[idx_in_actives]
+                bb_p = living_players[(idx_in_actives + 1) % num_living]
+            else:
+                sb_p = living_players[(idx_in_actives + 1) % num_living]
+                bb_p = living_players[(idx_in_actives + 2) % num_living]
+
+            # ブラインドの自動徴収
+            sb_amnt = min(game.rules.SB, sb_p.chips)
+            sb_p.chips -= sb_amnt
+            sb_p.game_bet = sb_amnt  
+
+            bb_amnt = min(game.rules.BB, bb_p.chips)
+            bb_p.chips -= bb_amnt
+            bb_p.game_bet = bb_amnt  
+
+            for p in living_players:
+                if p.status != HandStatus.FOLDED: p.hand = game.deck.draw(2)
+
+            # ベッティングラウンド（AIが意思を持って激突）
+            game.run_betting_round("プリフロップ")
+            for phase in ["フロップ", "ターン", "リバー"]:
+                survivors_count = sum(1 for p in game.players if p.status != HandStatus.FOLDED and not p.is_busted)
+                if survivors_count > 1:
+                    game.board.extend(game.deck.draw(3 if phase == "フロップ" else 1))
+                    if sum(1 for p in game.players if p.can_make_action()) >= 2:
+                        game.run_betting_round(phase)
+
+            # ショーダウン配当と役の記録
+            survivors = [p for p in game.players if p.status != HandStatus.FOLDED and not p.is_busted]
+            if len(survivors) == 1:
+                survivors[0].chips += sum(p.game_bet for p in game.players)
+            else:
+                for p in survivors:
+                    from super_main import evaluate_7_cards
+                    p.score, p.hand_name = evaluate_7_cards(p.hand + game.board)
+                    
+                    # 📊 役の生データをカウント
+                    stats["hand_counts"][p.hand_name] = stats["hand_counts"].get(p.hand_name, 0) + 1
+                    
+                game.pot_manager.distribute_pots(game.players)
+                
+            # 場（Betエリア）のリセット
+            for p in game.players: p.game_bet = 0
+
+            # --- 📊 破産関係の集計 ---
+            for idx, p in enumerate(game.players):
+                if p.chips <= 0 and not pre_game_busted[idx]:
+                    if idx == 0:
+                        stats["user_got_busted"] += 1
+                    elif idx > 0:
+                        if (len(survivors) == 1 and survivors[0].id == 0) or (0 in [w.id for w in survivors]):
+                            stats["user_busted_opponents"] += 1
+
+            # 🛑 お会計監査（全財産チェック）
+            current_total = sum(p.chips for p in game.players)
+            if current_total != 4000:
+                print(f"\n🚨 【お会計ミス検知】第 {game_num} 試合でチップが狂いました！")
+                raise AssertionError("Game chip total mismatch")
+
+            # 💡 10万回ごとに、すっきりとまとめた中間レポートを出力
+            if game_num % 100000 == 0 or game_num == total_games:
+                print(f"\n📈 --- 【第 {game_num:,} 試合時点のリアルタイム戦績レポート】 ---")
+                print(f" 🥊 あなたがCPUを破産させた回数  : {stats['user_busted_opponents']} 回")
+                print(f" 💀 あなたがCPUに破産させられた回数: {stats['user_got_busted']} 回")
+                print(" 🃏 ショーダウンで成立した役の統計:")
+                
+                # 大枠の役名に綺麗にマージする
+                summary_hands = {}
+                for raw_hand, count in stats["hand_counts"].items():
+                    main_hand_name = "ハイカード"
+                    if "ワンペア" in raw_hand: main_hand_name = "ワンペア"
+                    elif "ツーペア" in raw_hand: main_hand_name = "ツーペア"
+                    elif "スリーカード" in raw_hand: main_hand_name = "スリーカード"
+                    elif "ストレートフラッシュ" in raw_hand: main_hand_name = "ストレートフラッシュ"
+                    elif "ストレート" in raw_hand: main_hand_name = "ストレート"
+                    elif "フラッシュ" in raw_hand: main_hand_name = "フラッシュ"
+                    elif "フルハウス" in raw_hand: main_hand_name = "フルハウス"
+                    elif "フォーカード" in raw_hand: main_hand_name = "フォーカード"
+                    elif "ロイヤル" in raw_hand: main_hand_name = "ロイヤルストレートフラッシュ"
+                    
+                    summary_hands[main_hand_name] = summary_hands.get(main_hand_name, 0) + count
+
+                # ポーカーの強い順に並べて表示
+                hand_order = ["ハイカード", "ワンペア", "ツーペア", "スリーカード", "ストレート", "フラッシュ", "フルハウス", "フォーカード", "ストレートフラッシュ", "ロイヤルストレートフラッシュ"]
+                for hand in hand_order:
+                    if hand in summary_hands:
+                        print(f"   - {hand:<25}: {summary_hands[hand]:>5} 回")
+                print("-" * 60)
+
+        print(f"\n🏆 【完全勝利】実戦AIによる {total_games:,} 試合、お会計ミスは【0件】でした！")
+
+    except AssertionError:
+        pass
+    except Exception as e:
+        print(f"\n❌ 予期せぬシステムエラー: {e}")
+
+if __name__ == "__main__":
+    # 🔥 1,000,000回（100万回）マラソン実行！
+    run_stat_ai_marathon(1000000)
