@@ -7,6 +7,9 @@ import tkinter as tk
 # 提供されたゲームロジックファイルをインポート
 from super_main import HandStatus, Player, TexasHoldemGame
 
+# 【追加】別ウィンドウの掲示板クラスをインポート
+from Board_Popup import BoardPopup
+
 
 class ResetGameException(Exception):
     """ゲームを安全に終了させるための例外"""
@@ -44,7 +47,7 @@ class TexasHoldemGUI:
         
         self.action_event = threading.Event()
         self.selected_action = (None, 0)
-        
+    
         # UI制御フラグ
         self.show_setup_panel = True
         self.setup_step = "players"
@@ -55,6 +58,12 @@ class TexasHoldemGUI:
         self.num_players = 3
         self.debug_mode = False
         self.chip_flow_text = "初期設定を行ってください"
+
+        # 役名・勝者ログの二重出力を防ぐためのフラグ
+        self.printed_showdown_log = False
+
+        # ②【指示通り追加】掲示板ウィンドウを生成して準備
+        self.board_popup = BoardPopup(self.root)
 
         self.setup_ui()
         
@@ -475,6 +484,10 @@ class TexasHoldemGUI:
             self.log_text.insert(tk.END, f" {msg}\n")
         self.log_text.see(tk.END)
         self.log_text.config(state="disabled")
+
+        # ③【指示通り追加】メインのログが更新されたら、掲示板ウィンドウにも最新の1行を流す
+        if messages:
+            self.board_popup.add_message(messages[-1])
 
 
 if __name__ == "__main__":
