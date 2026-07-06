@@ -11,11 +11,20 @@ if not ACCESS_TOKEN:
 
 app = Flask(__name__)
 
+@app.route('/')
+def index():
+    return jsonify({"status": "ok", "message": "Poker Server is Running!"})
+
 @app.route("/join", methods=["POST"])
 def join_game():
     data = request.json or {}
     name = data.get("name", "Player")
-    room_id, player_id = manager.assign_room(name)
+    
+    # ★ クライアントから送られてきた「目標人数」を受け取る（送られてこなければデフォルト2人）
+    target_players = data.get("target_players", 2)
+    
+    # ★ controllerのassign_roomに人数を渡す
+    room_id, player_id = manager.assign_room(name, target_players=target_players)
     return jsonify({"room_id": room_id, "player_id": player_id})
 
 @app.route("/state", methods=["GET"])

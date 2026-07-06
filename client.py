@@ -51,7 +51,6 @@ class BoardPopup:
         msg = self.entry.get().strip()
         if msg:
             if self.client.is_cpu_mode:
-                # CPUモードの時はローカルチャットに流す
                 self.client.local_room.chat_logs.append(f"【{self.client.player_name}】: {msg}")
                 self.entry.delete(0, tk.END)
             else:
@@ -87,13 +86,13 @@ class TexasHoldemGUI:
         
         self.chip_flow_text = "モード選択待ち..."
         self.state_data = {}
+        self.target_players = 2  # 目標人数を保持する変数
 
         self.setup_ui()
         self.prompt_mode_selection()
 
     def prompt_mode_selection(self):
-        # モード選択の確認
-        mode_choice = messagebox.askyesnocancel("モード選択", "オンライン対人戦をプレイしますか？\n\n【はい】 -> 対人戦\n【いいえ】 -> CPU戦\n【キャンセル】 -> 終了")
+        mode_choice = messagebox.askyesnocancel("モード選択", "オンライン対人戦をプレイしますか？\n\n【はい】 -> 对人戦\n【いいえ】 -> CPU戦\n【キャンセル】 -> 終了")
         
         if mode_choice is None:
             self.root.quit()
@@ -104,6 +103,7 @@ class TexasHoldemGUI:
 
         target_p = simpledialog.askinteger("参加人数", "何人プレイにしますか？ (2〜6人):", parent=self.root, minvalue=2, maxvalue=6)
         if not target_p: target_p = 2
+        self.target_players = target_p
 
         if mode_choice:  # 対人戦モード
             self.is_cpu_mode = False
@@ -111,12 +111,14 @@ class TexasHoldemGUI:
             if url: self.server_url = url.rstrip("/")
             
             try:
-                # サーバー側へ目標人数（target_players）も一緒に送るようにHTTPリクエストを少し拡張
-                # 今回のserver.pyは既存のassign_roomを叩きます（server側は自動的に引数を受け取ります）
-                res = requests.post(f"{self.server_url}/join", json={"name": self.player_name}).json()
+                # ★ 修正ポイント: サーバー側へ目標人数（target_players）も一緒に送る
+                res = requests.post(f"{self.server_url}/join", json={
+                    "name": self.player_name,
+                    "target_players": self.target_players
+                }).json()
                 self.room_id = res["room_id"]
                 self.player_id = res["player_id"]
-                self.chip_flow_text = f"部屋 [{self.room_id}] に入室しました。指定の人数 ({target_p}人) が揃うまでお待ちください..."
+                self.chip_flow_text = f"部屋 [{self.room_id}] に入室しました。指定の人数 ({self.target_players}人) が揃うまでお待ちください..."
                 self.poll_server_loop()
             except Exception as e:
                 self.chip_flow_text = "❌ サーバーへの接続に失敗しました。"
@@ -127,7 +129,6 @@ class TexasHoldemGUI:
             self.local_room = OnlinePokerRoom(room_id=999, target_players=target_p)
             self.player_id = self.local_room.add_player(self.player_name, is_human=True)
             
-            # 残りの枠をCPUで埋める
             for cpu_idx in range(1, target_p):
                 self.local_room.add_player(f"CPU-{cpu_idx}", is_human=False)
                 
@@ -164,13 +165,11 @@ class TexasHoldemGUI:
 
     def poll_server_loop(self):
         if self.is_cpu_mode:
-            # CPU戦ならローカルのルームから状態を即座に引っこ抜く
             res = self.local_room.get_state(self.player_id)
             self.state_data = res
             self.append_log(res.get("action_logs", []))
             self.board_popup.update_chat_logs(res.get("chat_logs", []))
             self.refresh_table(res.get("round_name", ""))
-            # CPU戦は同期が早いため少し短めの間隔で更新
             self.root.after(400, self.poll_server_loop)
         else:
             if self.room_id is not None:
@@ -183,9 +182,14 @@ class TexasHoldemGUI:
                         self.board_popup.update_chat_logs(res.get("chat_logs", []))
                         self.refresh_table(res.get("round_name", ""))
                     else:
-                        # まだ始まっていない場合は待機画面を描画
+                        # ★ 待機中画面の描画を強化 (何人集まったかリアルタイムに表示)
+                        current_p_count = len(res.get('players', []))
                         self.canvas.delete("all")
-                        self.canvas.create_text(475, 220, text=f"⏳ 他のプレイヤーを待っています...\n\n現在の参加人数: {len(res.get('players', []))} 人", fill="white", font=("MS Gothic", 16, "bold"), justify="center")
+                        self.canvas.create_text(
+                            475, 220, 
+                            text=f"⏳ 他のプレイヤーを待っています...\n\n現在の参加人数: {current_p_count} / {self.target_players} 人", 
+                            fill="white", font=("MS Gothic", 16, "bold"), justify="center"
+                        )
                 except Exception as e:
                     pass
             self.root.after(800, self.poll_server_loop)
