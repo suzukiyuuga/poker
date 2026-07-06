@@ -330,4 +330,19 @@ class TexasHoldemGUI:
 if __name__ == "__main__":
     root = tk.Tk()
     app = TexasHoldemGUI(root)
+    
+    # ★ ウィンドウを閉じるボタン（Xボタン）が押されたときの処理を登録
+    def on_closing():
+        if not app.is_cpu_mode and app.room_id is not None and app.player_id is not None:
+            try:
+                # サーバーに退出（leave）を通知（タイムアウト1秒でサクッと送る）
+                requests.post(f"{app.server_url}/leave", json={
+                    "room_id": app.room_id,
+                    "player_id": app.player_id
+                }, timeout=1.0)
+            except:
+                pass
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
