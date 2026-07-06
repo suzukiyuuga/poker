@@ -16,8 +16,8 @@ VALUE_TO_RANK = {v: r for r, v in RANK_VALUES.items()}
 
 class HandStatus(Enum):
     PLAYING = auto()  
-    FOLDED = auto()   
-    ALL_IN = auto()   
+    FOLDED = auto()  
+    ALL_IN = auto()  
 
 class GameStructure:
     def __init__(self, sb=10, bb=20, min_raise_inc=20):
@@ -66,13 +66,13 @@ class Player:
         self.is_human = is_human    
         
         self.status = HandStatus.PLAYING
-        self.is_busted = False       
+        self.is_busted = False      
         self.hand = []              
-        self.game_bet = 0           
+        self.game_bet = 0          
         self.round_bet = 0          
         self.acted = False          
         self.score = (-1,)          
-        self.hand_name = ""         
+        self.hand_name = ""        
 
     def reset_for_new_round(self):
         self.round_bet = 0
@@ -204,13 +204,13 @@ def evaluate_5_cards(cards):
     values = sorted([c.value for c in cards], reverse=True)
     suits = [c.suit for c in cards]
     
-    is_flush = len(set(suits)) == 1 
-    unique_values = sorted(list(set(values)), reverse=True) 
+    is_flush = len(set(suits)) == 1
+    unique_values = sorted(list(set(values)), reverse=True)
     
     is_straight, straight_high = False, 0
     if len(unique_values) == 5:
         is_straight, straight_high = check_straight(unique_values)
-        if is_straight and straight_high == 5: 
+        if is_straight and straight_high == 5:
             values = [5, 4, 3, 2, 1]
             
     counts = Counter(values)
@@ -243,7 +243,7 @@ def check_draw_opportunity(cards):
     if any(count == 4 for count in Counter([c.suit for c in cards]).values()):
         return True
     values = set(c.value for c in cards)
-    if 14 in values: 
+    if 14 in values:
         values.add(1)
     for start in range(1, 12):
         window = set(range(start, start + 5))
@@ -268,11 +268,11 @@ def cpu_decision(cpu_cards, board, to_call_bb, cpu_chips_bb):
             if is_pair and v1 >= 5: return 1, 0  
             if high_card_sum >= 20: return 1, 0  
             if is_suited and abs(v1 - v2) <= 2: return 1, 0
-            if to_call_bb <= 1.0: return 1, 0 
-            return 3, 0 
+            if to_call_bb <= 1.0: return 1, 0
+            return 3, 0
         else:
             if is_pair or high_card_sum >= 22:
-                return 2, min(2.0, cpu_chips_bb) 
+                return 2, min(2.0, cpu_chips_bb)
             return 1, 0
 
     score_idx = evaluate_7_cards(all_cards)[0][0]
@@ -283,7 +283,7 @@ def cpu_decision(cpu_cards, board, to_call_bb, cpu_chips_bb):
         return 1, 0
     else:
         if to_call_bb >= 7.5:
-            if score_idx >= 3: return 1, 0 
+            if score_idx >= 3: return 1, 0
             if score_idx == 2 and random.random() < 0.7: return 1, 0
             if score_idx == 1 and max(v.value for v in cpu_cards) >= 13 and random.random() < 0.3: return 1, 0
             return 3, 0
@@ -307,13 +307,13 @@ class TexasHoldemGame:
     def __init__(self):
         self.players = []          
         self.board = []            
-        self.deck = None           
-        self.dealer_idx = -1       
+        self.deck = None          
+        self.dealer_idx = -1      
         self.action_logs = []      
         self.debug_mode = False    
         
-        self.rules = GameStructure()   
-        self.pot_manager = PotManager() 
+        self.rules = GameStructure()  
+        self.pot_manager = PotManager()
 
     def safe_input(self, prompt):
         try:
@@ -417,9 +417,9 @@ class TexasHoldemGame:
         
         cpu_act, cpu_val_pt = cpu_decision(p.hand, self.board, to_call_bb, cpu_chips_bb)
         
-        if cpu_act == 2 and not can_raise: 
+        if cpu_act == 2 and not can_raise:
             cpu_act = 1
-        if cpu_act == 2 and p.chips <= to_call: 
+        if cpu_act == 2 and p.chips <= to_call:
             cpu_act = 1
         
         if cpu_act == 1:
@@ -483,7 +483,7 @@ class TexasHoldemGame:
             if round_name == "プリフロップ":
                 list_cursor = dealer_active_idx  
             else:
-                list_cursor = (dealer_active_idx + 1) % num_active 
+                list_cursor = (dealer_active_idx + 1) % num_active
         else:
             start_offset = 3 if round_name == "プリフロップ" else 1
             list_cursor = (dealer_active_idx + start_offset) % num_active
@@ -568,7 +568,7 @@ class TexasHoldemGame:
             self.deck = Deck()
 
             # 🛡️ 【絶対防衛線 2】変数のクリーンリセット。ここでも0ptのプレイヤーが混ざる余地を完全に排除
-            for p in self.players: 
+            for p in self.players:
                 p.reset_for_new_game()
                 if p.chips <= 0:
                     p.is_busted = True
@@ -589,7 +589,7 @@ class TexasHoldemGame:
             self.dealer_idx = living_players[idx_in_actives].id
             num_living = len(living_players)
 
-            if num_living == 2: 
+            if num_living == 2:
                 sb_p = living_players[idx_in_actives]
                 bb_p = living_players[(idx_in_actives + 1) % num_living]
             else:
@@ -599,22 +599,27 @@ class TexasHoldemGame:
             # 💡 ブラインド徴収。すでに上のフェーズでchips=0の人間は除外されているため、必ず最小でも1以上のチップから徴収が始まります。
             sb_amnt = min(self.rules.SB, sb_p.chips)
             sb_p.chips -= sb_amnt
-            sb_p.round_bet = sb_amnt 
+            sb_p.round_bet = sb_amnt
             sb_p.game_bet = sb_amnt  
-            if sb_p.chips == 0: 
+            if sb_p.chips == 0:
                 sb_p.status = HandStatus.ALL_IN if sb_amnt > 0 else HandStatus.FOLDED
-                sb_p.acted = True 
+                sb_p.acted = True
 
             bb_amnt = min(self.rules.BB, bb_p.chips)
             bb_p.chips -= bb_amnt
-            bb_p.round_bet = bb_amnt 
+            bb_p.round_bet = bb_amnt
             bb_p.game_bet = bb_amnt  
-            if bb_p.chips == 0: 
+            if bb_p.chips == 0:
                 bb_p.status = HandStatus.ALL_IN if bb_amnt > 0 else HandStatus.FOLDED
-                bb_p.acted = True 
+                bb_p.acted = True
 
-            print(f" 📢 【システム】{sb_p.name} がSB({sb_amnt}pt)を支払いました。")
-            print(f" 📢 【システム】{bb_p.name} がBB({bb_amnt}pt)を支払いました。")
+            # 【修正①】ブラインド支払いをシステムログ・GUI用ログの双方に出力
+            msg_sb = f" 📢 【システム】{sb_p.name} がSB({sb_amnt}pt)を支払いました。"
+            msg_bb = f" 📢 【システム】{bb_p.name} がBB({bb_amnt}pt)を支払いました。"
+            print(msg_sb)
+            print(msg_bb)
+            self.add_log(msg_sb)
+            self.add_log(msg_bb)
 
             self.verify_chip_integrity(f"第{games_count}戦・カード配布前")
 
@@ -644,7 +649,11 @@ class TexasHoldemGame:
                 winner = survivors[0]
                 total_pot = sum(p.game_bet for p in self.players)
                 winner.chips += total_pot
-                print(f"\n全員がフォールドしたため、{winner.name} の不戦勝です！\n 💰 {total_pot}pt を獲得。")
+                
+                # 【修正②】不戦勝（フォールド勝ち）をシステムログ・GUI用ログの双方に出力
+                msg_win = f"全員がフォールドしたため、{winner.name} の不戦勝です！ 💰 {total_pot}pt を獲得。"
+                print("\n" + msg_win)
+                self.add_log(msg_win)
                 
                 for p in self.players:
                     p.game_bet = 0
@@ -653,16 +662,22 @@ class TexasHoldemGame:
                 print("\n" + "=" * 70)
                 print(" 🔥 [LOG] ショーダウン結果発表 🔥")
                 print("=" * 70)
+                
+                # 【修正③】ショーダウン ＆ 配当結果をGUIログ側にも全て同期
+                self.add_log("🔥 [LOG] ショーダウン結果発表 🔥")
                 for p in survivors:
                     score, name = evaluate_7_cards(p.hand + self.board)
                     p.score = score
                     p.hand_name = name
-                    print(f" 🃏 {p.name:<6}: {p.hand[0]} {p.hand[1]} -> 【{name}】")
+                    showdown_msg = f" 🃏 {p.name:<6}: {p.hand[0]} {p.hand[1]} -> 【{name}】"
+                    print(showdown_msg)
+                    self.add_log(showdown_msg)
                 print("----------------------------------------------------------------------")
                 
                 distribution_logs = self.pot_manager.distribute_pots(self.players)
                 for log in distribution_logs:
                     print(log)
+                    self.add_log(log)
                 print("======================================================================\n")
                 
                 for p in self.players:
@@ -672,7 +687,10 @@ class TexasHoldemGame:
                 if p.chips <= 0 and not p.is_busted:
                     p.chips = 0
                     p.is_busted = True
-                    print(f"📢 【アナウンス】{p.name} が完全に破産（トビ）しました。")
+                    # 【修正④】トビ（破産）アナウンスをGUIログ側にも同期
+                    bust_msg = f"📢 【アナウンス】{p.name} が完全に破産（トビ）しました。"
+                    print(bust_msg)
+                    self.add_log(bust_msg)
 
             self.verify_chip_integrity(f"第{games_count}戦・配当完了後")
 

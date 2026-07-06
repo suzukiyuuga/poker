@@ -47,7 +47,7 @@ class PracticalAIGame(TexasHoldemGame):
 # =====================================================================
 # 🚀 10万回・お急ぎマラソン本体
 # =====================================================================
-def run_stat_ai_marathon(total_games=100000):
+def run_stat_ai_marathon(total_games=1000000):
     print("============================================================")
     print(f"⏰ 就寝前ラストスパート！高速戦績監査（{total_games:,}回）")
     print("============================================================")
@@ -190,4 +190,4 @@ def run_stat_ai_marathon(total_games=100000):
         print(f"\n❌ 予期せぬシステムエラー: {e}")
 
 if __name__ == "__main__":
-    run_stat_ai_marathon(100000)
+    run_stat_ai_marathon(1000000)
