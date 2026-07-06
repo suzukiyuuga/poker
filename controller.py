@@ -455,4 +455,22 @@ class RoomManager:
         p_id = room.add_player(player_name, is_human=True)
         return r_id, p_id
 
+def leave_room(self, room_id, player_id):
+        room = self.rooms.get(room_id)
+        if not room:
+            return False
+            
+        # 1. 該当するプレイヤーを部屋のリストから削除
+        room.players = [p for p in room.players if p.id != player_id]
+        
+        # ログに残す
+        room.action_logs.append(f"🏃 プレイヤー(ID:{player_id}) が退室しました。")
+        
+        # 2. まだゲームが始まっておらず、生存しているプレイヤーが0人になったら部屋を完全に消去
+        if not room.game_started and len(room.players) == 0:
+            del self.rooms[room_id]
+            room.action_logs.append(f"🗑️ 部屋 [{room_id}] に誰もいなくなったため、部屋を削除しました。")
+            
+        return True
+
 manager = RoomManager()

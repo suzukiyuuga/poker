@@ -27,6 +27,16 @@ def join_game():
     room_id, player_id = manager.assign_room(name, target_players=target_players)
     return jsonify({"room_id": room_id, "player_id": player_id})
 
+@app.route("/leave", methods=["POST"])
+def leave_game():
+    data = request.json or {}
+    room_id = int(data.get("room_id", 0))
+    player_id = int(data.get("player_id", 0))
+    
+    # controllerのmanagerに退室処理を行わせる
+    success = manager.leave_room(room_id, player_id)
+    return jsonify({"success": success})
+
 @app.route("/state", methods=["GET"])
 def get_state():
     room_id = int(request.args.get("room_id", 0))
