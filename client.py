@@ -4,12 +4,12 @@ import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox
 import requests
 
-class CardMock:
+class CardMock:#番号と模様の紐づけ
     def __init__(self, suit, rank):
         self.suit = suit
         self.rank = rank
 
-class BoardPopup:
+class BoardPopup:#チャット掲示板の見た目
     def __init__(self, parent, client, title="ポーカー実況・チャット掲示板"):
         self.parent = parent
         self.client = client
@@ -50,10 +50,10 @@ class BoardPopup:
     def send_message(self):
         msg = self.entry.get().strip()
         if msg:
-            if self.client.is_cpu_mode:
+            if self.client.is_cpu_mode:#コンピューター対戦の場合
                 self.client.local_room.chat_logs.append(f"【{self.client.player_name}】: {msg}")
                 self.entry.delete(0, tk.END)
-            else:
+            else:#ネット有人対戦の場合
                 try:
                     requests.post(f"{self.client.server_url}/chat", json={
                         "room_id": self.client.room_id,
@@ -65,7 +65,7 @@ class BoardPopup:
                     pass
 
 class TexasHoldemGUI:
-    def __init__(self, root):
+    def __init__(self, root):#初期化
         self.root = root
         self.root.title("♠♥♦♣ テキサスホールデム・ポーカー ♣♦♥♠")
         self.root.geometry("950x900")
@@ -91,7 +91,7 @@ class TexasHoldemGUI:
         self.setup_ui()
         self.prompt_mode_selection()
 
-    def prompt_mode_selection(self):
+    def prompt_mode_selection(self):#モード選択の処理
         mode_choice = messagebox.askyesnocancel("モード選択", "オンライン対人戦をプレイしますか？\n\n【はい】 -> 对人戦\n【いいえ】 -> CPU戦\n【キャンセル】 -> 終了")
         
         if mode_choice is None:
@@ -135,7 +135,7 @@ class TexasHoldemGUI:
             self.chip_flow_text = f"ローカルCPU戦を開始しました ({target_p}人プレイ)"
             self.poll_server_loop()
 
-    def setup_ui(self):
+    def setup_ui(self):#ゲーム中のUIの管理
         self.top_frame = tk.Frame(self.root, bg="#0d241c", height=45)
         self.top_frame.grid(row=0, column=0, sticky="ew")
 
@@ -163,20 +163,20 @@ class TexasHoldemGUI:
 
         self.board_popup = BoardPopup(self.root, self)
 
-    def poll_server_loop(self):
-        if self.is_cpu_mode:
+    def poll_server_loop(self):#最新状況をサーバーから呼び出す
+        if self.is_cpu_mode:#CPU戦
             res = self.local_room.get_state(self.player_id)
             self.state_data = res
             self.append_log(res.get("action_logs", []))
             self.board_popup.update_chat_logs(res.get("chat_logs", []))
             self.refresh_table(res.get("round_name", ""))
-            self.root.after(400, self.poll_server_loop)
-        else:
+            self.root.after(400, self.poll_server_loop)#0.4秒ごと最新状況を取り出す
+        else:#オンライン有人対戦
             if self.room_id is not None:
                 try:
                     res = requests.get(f"{self.server_url}/state", params={"room_id": self.room_id, "player_id": self.player_id}).json()
                     self.state_data = res
-                    if res.get("game_started"):
+                    if res.get("game_started"):#ゲームが開始している場合
                         self.announcement_label.config(text=f"部屋 [{self.room_id}] オンライン対戦中")
                         self.append_log(res.get("action_logs", []))
                         self.board_popup.update_chat_logs(res.get("chat_logs", []))
@@ -192,9 +192,9 @@ class TexasHoldemGUI:
                         )
                 except Exception as e:
                     pass
-            self.root.after(800, self.poll_server_loop)
+            self.root.after(800, self.poll_server_loop)#0.8秒ごと最新状況を取り出す
 
-    def draw_card_object(self, cx, cy, card_data, is_hidden=False):
+    def draw_card_object(self, cx, cy, card_data, is_hidden=False):#トランプカードの描画
         card_w, card_h = 36, 50
         if is_hidden or card_data is None:
             self.canvas.create_rectangle(cx-card_w/2, cy-card_h/2, cx+card_w/2, cy+card_h/2, fill="#b71c1c", outline="white")
@@ -225,7 +225,7 @@ class TexasHoldemGUI:
         self.canvas.create_text(center_x, center_y-45, text=f"【{round_name}】\nTotal Pot: {pot_val} pt", fill="#ffb300", font=("Arial", 12, "bold"), justify="center")
 
         board = self.state_data.get("board", [])
-        if board:
+        if board:#テーブル中央にカードを並べる
             bx = center_x - (len(board) - 1) * 22
             for idx, card in enumerate(board):
                 self.draw_card_object(bx + (idx * 44), center_y, card)
@@ -233,7 +233,7 @@ class TexasHoldemGUI:
         num_p = len(players_data)
         me = next((p for p in players_data if p["id"] == self.player_id), None)
         
-        for i, p in enumerate(players_data):
+        for i, p in enumerate(players_data):#各々の手札の書き方
             angle = math.radians(90 + (i * (360 / num_p)))
             px, py = center_x + rx * math.cos(angle), center_y + ry * math.sin(angle)
 
@@ -259,13 +259,15 @@ class TexasHoldemGUI:
             if p["round_bet"] > 0 and not p["is_busted"]:
                 self.canvas.create_text(px, py+50, text=f"Bet: {p['round_bet']}pt", fill="#ffab91", font=("Arial", 9, "italic"))
 
+        #自分の手番
         if self.state_data.get("current_turn_player_id") == self.player_id and me and me["status"] == "PLAYING":
             self.draw_action_ui(width, height, me)
 
+        #次へ進む操作
         if self.state_data.get("show_intermission"):
             self.draw_intermission_ui(width, height)
 
-    def draw_action_ui(self, width, height, me):
+    def draw_action_ui(self, width, height, me):#プレイヤーコマンドの描画
         self.control_panel.place(x=width/2 - 240, y=height - 110, width=480, height=100)
         tk.Label(self.control_panel, text=f"【あなたの番】所持: {me['chips']}pt", bg="#123026", fg="#ffff00", font=("Arial", 9, "bold")).pack(pady=2)
 
@@ -302,7 +304,7 @@ class TexasHoldemGUI:
             except:
                 pass
 
-    def draw_intermission_ui(self, width, height):
+    def draw_intermission_ui(self, width, height):#インターミッション時のUI表示と準備OKの送信
         self.control_panel.place(x=width/2 - 160, y=height/2 - 50, width=320, height=100)
         tk.Label(self.control_panel, text="ゲームを続けますか？", bg="#123026", fg="white", font=("MS Gothic", 11, "bold")).pack(pady=10)
         f = tk.Frame(self.control_panel, bg="#123026")
@@ -319,7 +321,7 @@ class TexasHoldemGUI:
             except:
                 pass
 
-    def append_log(self, messages):
+    def append_log(self, messages):#画面下の黒いログの内容の表示と更新
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", tk.END)
         for msg in messages:
@@ -327,7 +329,7 @@ class TexasHoldemGUI:
         self.log_text.see(tk.END)
         self.log_text.config(state="disabled")
 
-if __name__ == "__main__":
+if __name__ == "__main__":#このファイルが実行された際の処理
     root = tk.Tk()
     app = TexasHoldemGUI(root)
     
