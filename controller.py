@@ -25,7 +25,7 @@ HAND_NAMES = {
     3: "スリーカード", 2: "ツーペア", 1: "ワンペア", 0: "ハイカード"
 }
 
-class Card:
+class Card:#カードのインスタンス化
     def __init__(self, suit, rank):
         self.suit = suit
         self.rank = rank
@@ -33,7 +33,7 @@ class Card:
     def __repr__(self):
         return f"[{self.suit}{self.rank}]"
 
-class Deck:
+class Deck:#山札のｎカードを片っ端から生成し、必要に応じて取り出す処理
     def __init__(self):
         self.cards = [Card(s, r) for s in SUITS for r in RANKS]
         random.shuffle(self.cards)
@@ -55,7 +55,7 @@ class Player:
         self.hand_name = ""        
         self.is_human = is_human  # CPU戦の判定用
 
-    def reset_for_new_round(self):
+    def reset_for_new_round(self):#プレイヤーが操作可能かどうか
         self.round_bet = 0
         if self.status == HandStatus.PLAYING:
             self.acted = False
@@ -80,7 +80,7 @@ class SidePot:
         self.amount = amount
         self.eligible_player_ids = []
 
-class PotManager:
+class PotManager:#ショーダウンがある場合のお金の処理全般
     def build_pots(self, players):
         pots = []
         active_bets = sorted(list(set(p.game_bet for p in players if p.game_bet > 0)))
@@ -134,7 +134,7 @@ class PotManager:
                 winners[0].chips += diff
         return log_messages
 
-def evaluate_7_cards(cards):
+def evaluate_7_cards(cards):#役の判定
     def check_straight(values):
         if len(values) != 5: return False, 0
         if values[0] - values[4] == 4: return True, values[0]
@@ -385,7 +385,7 @@ class OnlinePokerRoom:
         self.round_name = "結果発表"
         survivors = [p for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted]
         
-        if len(survivors) == 1:
+        if len(survivors) == 1:#一人を除いてほかの人が下りた場合
             winner = survivors[0]
             total_pot = sum(p.game_bet for p in self.players)
             winner.chips += total_pot
