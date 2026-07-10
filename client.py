@@ -89,6 +89,9 @@ class TexasHoldemGUI:
         self.state_data = {}
         self.target_players = 2  # 目標人数を保持する変数
 
+        #CPUの行動かどうか
+        self.pending_cpu_turn_id = None
+
         #周期的に更新を続けるのではなく、必要なときに更新をするための変数群
         self.control_panel_mode = None   # None / "action" / "intermission"
         self.rendered_action_log_count = 0
@@ -178,6 +181,11 @@ class TexasHoldemGUI:
             self.append_log(res.get("action_logs", []))
             self.board_popup.update_chat_logs(res.get("chat_logs", []))
             self.refresh_table(res.get("round_name", ""))
+            
+            # CPUの番なら、ここで遅延実行を予約
+            self.schedule_cpu_action_if_needed()
+
+            
             self.root.after(400, self.poll_server_loop)#0.4秒ごと最新状況を取り出す
         else:#オンライン有人対戦
             if self.room_id is not None:
@@ -394,6 +402,62 @@ class TexasHoldemGUI:
             self.log_text.insert(tk.END, f" {msg}\n")
         self.log_text.see(tk.END)
         self.log_text.config(state="disabled")
+
+
+    def schedule_cpu_action_if_needed(self):#CPUの行動を予約する
+        if not self.is_cpu_mode:
+            return
+        if not self.local_room:
+            return
+        if not self.state_data:
+            return
+        if self.state_data.get("show_intermission", False):
+            return
+
+        current_id = self.state_data.get("current_turn_player_id")
+        if current_id is None:
+            self.pending_cpu_turn_id = None
+            return
+
+        player = next((p for p in self.local_room.players if p.id == current_id), None)
+        if player is None:
+            self.pending_cpu_turn_id = None
+            return
+
+        # 人間の番なら予約不要
+        if player.is_human:
+            self.pending_cpu_turn_id = None
+            return
+
+        # 同じCPUターンを何度も予約しない
+        if self.pending_cpu_turn_id == current_id:
+            return
+
+        self.pending_cpu_turn_id = current_id
+        self.root.after(900, lambda pid=current_id: self.execute_cpu_action(pid))
+        
+    def execute_cpu_action(self, player_id):
+        # 予約が途中で無効になっていたら何もしない
+        if self.pending_cpu_turn_id != player_id:
+            return
+
+        # 状態が変わっていてもうそのCPUの番でないならキャンセル
+        if not self.local_room:
+            self.pending_cpu_turn_id = None
+            return
+
+        if self.local_room.current_turn_player_id != player_id:
+            self.pending_cpu_turn_id = None
+            return
+
+        cpu_player = next((p for p in self.local_room.players if p.id == player_id), None)
+        if cpu_player is None or cpu_player.is_human:
+            self.pending_cpu_turn_id = None
+            return
+
+        self.pending_cpu_turn_id = None
+        self.local_room.think_cpu_action(cpu_player)
+
 
 if __name__ == "__main__":#このファイルが実行された際の処理
     root = tk.Tk()

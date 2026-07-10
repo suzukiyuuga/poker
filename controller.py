@@ -341,9 +341,6 @@ class OnlinePokerRoom:
 
             if p.status == HandStatus.PLAYING and not p.is_busted:
                 self.current_turn_player_id = p.id
-
-                if not p.is_human:
-                    self.think_cpu_action(p)
                 return
 
             self.list_cursor = (self.list_cursor + 1) % len(self.players)
