@@ -45,7 +45,11 @@ def decide_cpu_action(room, cpu_player):
         return "call", 0
 
     # コールが必要
-    if adjusted >= 82:
+    if random.random() < 0.01:#確率で脳死コール
+        return "call", to_call
+
+
+    if adjusted >= 82:#以下合理的判断
         if random.random() < 0.55:
             raise_amount = pick_cpu_raise_amount(room, cpu_player, adjusted, as_open=False)
             if raise_amount is not None:
