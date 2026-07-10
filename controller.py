@@ -260,57 +260,97 @@ class OnlinePokerRoom:
 
     def start_betting_round(self, r_name):
         self.round_name = r_name
-        for p in self.players: p.reset_for_new_round()
+
+        # 各プレイヤーのラウンド内状態を初期化
+        for p in self.players:
+            p.reset_for_new_round()
+
         if r_name == "プリフロップ":
-            for p in self.players: p.round_bet = p.game_bet
-        
+            # プリフロップでは SB/BB の強制ベットを round_bet に反映
+            for p in self.players:
+                p.round_bet = p.game_bet
+        else:
+            # フロップ以降はラウンドベットをリセット
+            for p in self.players:
+                p.round_bet = 0
+
         self.highest_bet = max(p.round_bet for p in self.players)
         self.min_raise_increment = self.rules.MIN_RAISE_INCREMENT
-        
+
+        # 生きているプレイヤー
         living = [p for p in self.players if not p.is_busted]
         num_living = len(living)
         idx_in_actives = living.index(self.players[self.dealer_idx])
-        
+
+        # 最初に行動するプレイヤーを決定
         if num_living == 2:
+            # ヘッズアップ
             if r_name == "プリフロップ":
-                start_p = living[idx_in_actives]
+                start_p = living[idx_in_actives]  # SB(=dealer)から
             else:
-                start_p = living[(idx_in_actives + 1) % num_living]
+                start_p = living[(idx_in_actives + 1) % num_living]  # BB側から
         else:
+            # 3人以上
             start_offset = 3 if r_name == "プリフロップ" else 1
             start_p = living[(idx_in_actives + start_offset) % num_living]
-            
+
         self.list_cursor = self.players.index(start_p)
+        self.current_turn_player_id = None
         self.next_turn()
 
     def next_turn(self):
-        alive = sum(1 for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted)
-        playable = sum(1 for p in self.players if p.status == HandStatus.PLAYING and not p.is_busted)
+        # フォールドしていない人（まだこのハンドに残っている人）
+        alive_players = [
+            p for p in self.players
+            if p.status != HandStatus.FOLDED and not p.is_busted
+        ]
 
-        if alive <= 1 or playable == 0:
+        # 実際に行動が必要な人（ALL_IN は除く）
+        playable_players = [
+            p for p in self.players
+            if p.status == HandStatus.PLAYING and not p.is_busted
+        ]
+
+        # 1人しか残っていないなら終了
+        if len(alive_players) <= 1:
+            self.end_game()
+            return
+
+        # 行動可能者がいないなら次フェーズへ
+        if len(playable_players) == 0:
             self.advance_phase()
             return
 
-        all_settled = True
-        for p in self.players:
-            if p.status == HandStatus.PLAYING and not p.is_busted:
-                if not p.acted or p.round_bet != self.highest_bet:
-                    all_settled = False
+        # ここが重要：
+        # 「行動可能なプレイヤー全員」が
+        #   1. すでに acted 済み
+        #   2. highest_bet に追いついている
+        # ならラウンド終了
+        all_settled = all(
+            p.acted and p.round_bet == self.highest_bet
+            for p in playable_players
+        )
         if all_settled:
             self.advance_phase()
             return
 
-        p = self.players[self.list_cursor]
-        if p.status != HandStatus.PLAYING or p.is_busted:
-            self.list_cursor = (self.list_cursor + 1) % len(self.players)
-            self.next_turn()
-            return
+        # 次の PLAYING プレイヤーを探す
+        checked = 0
+        while checked < len(self.players):
+            p = self.players[self.list_cursor]
 
-        self.current_turn_player_id = p.id
-        
-        # ★ もしCPUのターンなら、自動で即座に行動を決定するロジックを発動
-        if not p.is_human:
-            self.think_cpu_action(p)
+            if p.status == HandStatus.PLAYING and not p.is_busted:
+                self.current_turn_player_id = p.id
+
+                if not p.is_human:
+                    self.think_cpu_action(p)
+                return
+
+            self.list_cursor = (self.list_cursor + 1) % len(self.players)
+            checked += 1
+
+        # 保険
+        self.advance_phase()
 
     def think_cpu_action(self, cpu_player):
         """簡単なCPU思考ロジック"""
@@ -331,11 +371,21 @@ class OnlinePokerRoom:
         p = self.players[p_id]
         
         if act_type == "call":
+            # 実際に必要なコール額を再計算する
+            to_call = min(self.highest_bet - p.round_bet, p.chips)
+            amount = to_call
+
             p.chips -= amount
             p.round_bet += amount
             p.game_bet += amount
-            if p.chips == 0: p.status = HandStatus.ALL_IN
-            self.action_logs.append(f"{p.name}: {'チェック' if amount == 0 else f'{amount}ptでコール'}{'（All-in!）' if p.chips==0 else ''}")
+
+            if p.chips == 0:
+                p.status = HandStatus.ALL_IN
+
+            self.action_logs.append(
+                f"{p.name}: {'チェック' if amount == 0 else f'{amount}ptでコール'}"
+                f"{'（All-in!）' if p.chips == 0 else ''}"
+            )
             p.acted = True
         elif act_type == "raise":
             p.chips -= amount
@@ -357,6 +407,7 @@ class OnlinePokerRoom:
             p.acted = True
             self.action_logs.append(f"{p.name}: フォールド")
 
+        self.current_turn_player_id = None
         self.list_cursor = (self.list_cursor + 1) % len(self.players)
         self.next_turn()
         return True

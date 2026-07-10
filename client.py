@@ -66,6 +66,7 @@ class BoardPopup:#チャット掲示板の見た目
 
 class TexasHoldemGUI:
     def __init__(self, root):#初期化
+
         self.root = root
         self.root.title("♠♥♦♣ テキサスホールデム・ポーカー ♣♦♥♠")
         self.root.geometry("950x900")
@@ -87,6 +88,12 @@ class TexasHoldemGUI:
         self.chip_flow_text = "モード選択待ち..."
         self.state_data = {}
         self.target_players = 2  # 目標人数を保持する変数
+
+        #周期的に更新を続けるのではなく、必要なときに更新をするための変数群
+        self.control_panel_mode = None   # None / "action" / "intermission"
+        self.rendered_action_log_count = 0
+        self.rendered_chat_log_count = 0
+        self.last_round_name = None
 
         self.setup_ui()
         self.prompt_mode_selection()
@@ -164,6 +171,7 @@ class TexasHoldemGUI:
         self.board_popup = BoardPopup(self.root, self)
 
     def poll_server_loop(self):#最新状況をサーバーから呼び出す
+
         if self.is_cpu_mode:#CPU戦
             res = self.local_room.get_state(self.player_id)
             self.state_data = res
@@ -208,10 +216,40 @@ class TexasHoldemGUI:
 
     def refresh_table(self, round_name):
         self.canvas.delete("all")
-        for widget in self.control_panel.winfo_children(): widget.destroy()
-        self.control_panel.place_forget()
 
-        if not self.state_data: return
+        if not self.state_data:
+            return
+
+        players_data = self.state_data.get("players", [])
+        me = next((p for p in players_data if p["id"] == self.player_id), None)
+
+        is_my_turn = (
+            self.state_data.get("current_turn_player_id") == self.player_id
+            and me
+            and me["status"] == "PLAYING"
+        )
+        is_intermission = self.state_data.get("show_intermission", False)
+
+        # 今表示すべきパネルの種類を判定する
+        # intermission中 → インターミッションUIだけ表示
+        # 自分の番      → アクションUIだけ表示
+        # それ以外      → パネルを消す
+        should_show_action = (not is_intermission) and is_my_turn
+        should_show_intermission = is_intermission
+
+        # 現在の状態に合わない古いUIが残っていると邪魔なので、
+        # 毎回いったん control_panel を空にしてから、必要なものだけ描き直す
+        #for widget in self.control_panel.winfo_children():
+        #    widget.destroy()
+        #self.control_panel.place_forget()
+
+        if should_show_intermission:
+            desired_mode = "intermission"
+        elif should_show_action:
+            desired_mode = "action"
+        else:
+            desired_mode = None        
+
 
         width = self.canvas.winfo_width() or 950
         height = self.canvas.winfo_height() or 500
@@ -259,16 +297,44 @@ class TexasHoldemGUI:
             if p["round_bet"] > 0 and not p["is_busted"]:
                 self.canvas.create_text(px, py+50, text=f"Bet: {p['round_bet']}pt", fill="#ffab91", font=("Arial", 9, "italic"))
 
-        #自分の手番
-        if self.state_data.get("current_turn_player_id") == self.player_id and me and me["status"] == "PLAYING":
-            self.draw_action_ui(width, height, me)
+        ## 自分の手番UI
+        #if should_show_action:
+        #    self.draw_action_ui(width, height, me)
 
-        #次へ進む操作
-        if self.state_data.get("show_intermission"):
-            self.draw_intermission_ui(width, height)
+        ## インターミッションUI
+        #elif should_show_intermission:
+        #    self.draw_intermission_ui(width, height)
+                # control_panel は「モードが変わった時だけ」作り直す
+        
+        #現在のモードに合わせてどのUIを更新するべきか選択する
+        if desired_mode != self.control_panel_mode:
+            for widget in self.control_panel.winfo_children():
+                widget.destroy()
+            self.control_panel.place_forget()
+            self.control_panel_mode = desired_mode
+
+            if desired_mode == "action":
+                self.draw_action_ui(width, height, me)
+            elif desired_mode == "intermission":
+                self.draw_intermission_ui(width, height)
+
+        else:
+            # 同じモードのままなら、再生成しない
+            # ウィンドウサイズ変化等に備えて place だけ維持しておく
+            if desired_mode == "action":
+                self.control_panel.place(x=width/2 - 240, y=height - 110, width=480, height=100)
+            elif desired_mode == "intermission":
+                self.control_panel.place(x=width/2 - 160, y=height/2 - 50, width=320, height=100)
+            else:
+                self.control_panel.place_forget()
 
     def draw_action_ui(self, width, height, me):#プレイヤーコマンドの描画
+
+        ## もしすでにボタンやスライダーが生成されて存在しているなら、新しく作らずにそのまま処理を抜ける
+        #if self.control_panel.winfo_children(): return
+
         self.control_panel.place(x=width/2 - 240, y=height - 110, width=480, height=100)
+
         tk.Label(self.control_panel, text=f"【あなたの番】所持: {me['chips']}pt", bg="#123026", fg="#ffff00", font=("Arial", 9, "bold")).pack(pady=2)
 
         btn_frame = tk.Frame(self.control_panel, bg="#123026")
