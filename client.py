@@ -386,6 +386,13 @@ class TexasHoldemGUI:
         tk.Button(f, text="次戦へ進む", bg="#a5d6a7", width=12, font=("MS Gothic", 9, "bold"), command=self.submit_intermission).pack(side="left", padx=10)
 
     def submit_intermission(self):
+
+        #ログの表示状態の初期化
+        self.log_text.config(state="normal")
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.config(state="disabled")
+        #self.rendered_action_log_count = 0
+
         if self.is_cpu_mode:
             if self.local_room.show_intermission:
                 self.local_room.start_new_game()
@@ -395,13 +402,29 @@ class TexasHoldemGUI:
             except:
                 pass
 
-    def append_log(self, messages):#画面下の黒いログの内容の表示と更新
+    def append_log(self, messages):
+        
+        # action_logs が前回より短くなっていたら、
+        # controller 側でログがリセットされたとみなしてGUI側もリセット
+        if len(messages) < self.rendered_action_log_count:
+            self.log_text.config(state="normal")
+            self.log_text.delete("1.0", tk.END)
+            self.log_text.config(state="disabled")
+            self.rendered_action_log_count = 0
+        
+        
+        # messages 全体のうち、まだ描画していないぶんだけ追加
+        new_messages = messages[self.rendered_action_log_count:]
+        if not new_messages:
+            return
+
         self.log_text.config(state="normal")
-        self.log_text.delete("1.0", tk.END)
-        for msg in messages:
+        for msg in new_messages:
             self.log_text.insert(tk.END, f" {msg}\n")
         self.log_text.see(tk.END)
         self.log_text.config(state="disabled")
+
+        self.rendered_action_log_count = len(messages)
 
 
     def schedule_cpu_action_if_needed(self):#CPUの行動を予約する

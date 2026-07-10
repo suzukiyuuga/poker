@@ -210,10 +210,16 @@ class OnlinePokerRoom:
         self.game_started = True
         self.show_intermission = False
         self.games_count += 1
+
         self.board.clear()
         self.deck = Deck()
-        self.action_logs.append(f"🚨 ==================== 【 第 {self.games_count} 回 戦 開 始 】 ==================== 🚨")
-        
+
+        # 前ゲームの行動ログをここでリセット
+        self.action_logs = []
+
+        self.action_logs.append(
+            f"🚨 ==================== 【 第 {self.games_count} 回 戦 開 始 】 ==================== 🚨"
+        )        
         for p in self.players:
             p.reset_for_new_game()
 
