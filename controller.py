@@ -25,18 +25,28 @@ HAND_NAMES = {
     3: "スリーカード", 2: "ツーペア", 1: "ワンペア", 0: "ハイカード"
 }
 
-class Card:#カードのインスタンス化
-    def __init__(self, suit, rank):
+class Card:
+    def __init__(self, suit, rank, display_rank=None):
         self.suit = suit
-        self.rank = rank
-        self.value = RANK_VALUES[rank]
-    def __repr__(self):
-        return f"[{self.suit}{self.rank}]"
+        self.rank = rank                    # 役判定用の元ランク ("2"～"A")
+        self.value = RANK_VALUES[rank]      # 強さは今まで通り
+        self.display_rank = display_rank if display_rank is not None else rank#display_rankは見た目用
 
-class Deck:#山札のｎカードを片っ端から生成し、必要に応じて取り出す処理
-    def __init__(self):
-        self.cards = [Card(s, r) for s in SUITS for r in RANKS]
+    def __repr__(self):
+        return f"[{self.suit}{self.display_rank}]"
+
+class Deck:
+    def __init__(self, display_base=0):
+        self.display_base = display_base
+        self.cards = []
+
+        for s in SUITS:
+            for i, r in enumerate(RANKS):
+                display_rank = self.display_base + i
+                self.cards.append(Card(s, r, display_rank))
+
         random.shuffle(self.cards)
+
     def draw(self, n):
         return [self.cards.pop() for _ in range(n)]
 
@@ -194,6 +204,8 @@ class OnlinePokerRoom:
         
         self.target_players = target_players  # ★ 指定の開始人数
 
+        self.display_rank_base = 0  #このゲームで使う表示ランク帯の開始値を保存する変数を追加
+
     def add_player(self, name, is_human=True):
         if len(self.players) >= self.target_players or self.game_started: return None
         p_id = len(self.players)
@@ -215,11 +227,15 @@ class OnlinePokerRoom:
         self.deck = Deck()
 
         # 前ゲームの行動ログをここでリセット
-        self.action_logs = []
+        self.board.clear()
+
+        self.display_rank_base = random.randint(0, 86)
+        self.deck = Deck(display_base=self.display_rank_base)
 
         self.action_logs.append(
             f"🚨 ==================== 【 第 {self.games_count} 回 戦 開 始 】 ==================== 🚨"
-        )        
+        )
+
         for p in self.players:
             p.reset_for_new_game()
 
@@ -468,7 +484,7 @@ class OnlinePokerRoom:
     def get_state(self, p_id):
         return {
             "round_name": self.round_name,
-            "board": [[c.suit, c.rank] for c in self.board],
+            "board": [[c.suit, c.display_rank] for c in self.board],
             "highest_bet": self.highest_bet,
             "min_raise_increment": self.min_raise_increment,
             "current_turn_player_id": self.current_turn_player_id,
@@ -485,7 +501,8 @@ class OnlinePokerRoom:
                     "is_busted": p.is_busted,
                     "round_bet": p.round_bet,
                     "game_bet": p.game_bet,
-                    "hand": [[c.suit, c.rank] for c in p.hand] if (p.id == p_id or self.round_name == "結果発表") else None
+                    "hand": [[c.suit, c.display_rank] for c in p.hand]
+                            if (p.id == p_id or self.round_name == "結果発表") else None
                 } for p in self.players
             ]
         }
