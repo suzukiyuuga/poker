@@ -21,6 +21,9 @@ class BoardPopup:#チャット掲示板の見た目
         x = parent.winfo_x() + parent.winfo_width() + 10
         y = parent.winfo_y()
         self.window.geometry(f"+{x}+{y}")
+
+        #掲示板のウインドウが消された時の対策
+        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         self.label = tk.Label(self.window, text="💬 リアルタイムチャット掲示板", font=("Arial", 11, "bold"), pady=10)
         self.label.pack()
@@ -63,6 +66,14 @@ class BoardPopup:#チャット掲示板の見た目
                     self.entry.delete(0, tk.END)
                 except:
                     pass
+
+    #掲示板が消去された時の対策
+    def on_closing(self):
+            messagebox.showwarning(
+                "操作無効", 
+                "ゲーム進行に影響が出るため、チャット掲示板を閉じることはできません！\nそのまま表示してお使いください。",
+                parent=self.window
+            )
 
 class TexasHoldemGUI:
     def __init__(self, root):#初期化
