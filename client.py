@@ -4,6 +4,12 @@ import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox
 import requests
 
+#ついか
+from action_popup import ActionPopup  # ファイル先頭に追加
+
+
+
+
 class CardMock:#番号と模様の紐づけ
     def __init__(self, suit, rank):
         self.suit = suit
@@ -65,6 +71,26 @@ class BoardPopup:#チャット掲示板の見た目
                     pass
 
 class TexasHoldemGUI:
+    def open_action_popup(self, me):
+    # すでにポップアップが開いているなら何もしない
+        if hasattr(self, "action_popup_open") and self.action_popup_open:
+            return
+
+        self.action_popup_open = True
+
+        highest_bet = self.state_data.get("highest_bet", 0)
+        to_call = min(highest_bet - me["round_bet"], me["chips"])
+        can_raise = me["chips"] > to_call
+
+        popup = ActionPopup(self.root, me, to_call, can_raise)
+        self.root.wait_window(popup)  # ★ ポップアップが閉じるまで待つ
+
+        self.action_popup_open = False
+
+    # 結果を送信
+        if popup.result_action:
+            self.submit_action(popup.result_action, popup.result_amount)
+
     def __init__(self, root):#初期化
 
         self.root = root
@@ -321,11 +347,12 @@ class TexasHoldemGUI:
             self.control_panel.place_forget()
             self.control_panel_mode = desired_mode
 
+            """コメントアウト
             if desired_mode == "action":
                 self.draw_action_ui(width, height, me)
             elif desired_mode == "intermission":
                 self.draw_intermission_ui(width, height)
-
+"""
         else:
             # 同じモードのままなら、再生成しない
             # ウィンドウサイズ変化等に備えて place だけ維持しておく
@@ -335,6 +362,15 @@ class TexasHoldemGUI:
                 self.control_panel.place(x=width/2 - 160, y=height/2 - 50, width=320, height=100)
             else:
                 self.control_panel.place_forget()
+
+
+
+
+            #ついか
+        # ★ 自分の番になったらポップアップを開く
+        if desired_mode == "action":
+            self.open_action_popup(me)
+
 
     def draw_action_ui(self, width, height, me):#プレイヤーコマンドの描画
 
