@@ -2,6 +2,8 @@ import os
 from flask import Flask, request, jsonify
 from controller import manager
 
+#基本的に関数の内容がそのまま通信の内容になっている
+#通信の基盤づくり
 # Renderの環境変数からトークンを取得する
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 
@@ -16,7 +18,7 @@ def index():
     return jsonify({"status": "ok", "message": "Poker Server is Running!"})
 
 @app.route("/join", methods=["POST"])
-def join_game():
+def join_game():#入室処理
     data = request.json or {}
     name = data.get("name", "Player")
     
@@ -28,7 +30,7 @@ def join_game():
     return jsonify({"room_id": room_id, "player_id": player_id})
 
 @app.route("/leave", methods=["POST"])
-def leave_game():
+def leave_game():#退出処理
     data = request.json or {}
     room_id = int(data.get("room_id", 0))
     player_id = int(data.get("player_id", 0))
@@ -46,7 +48,7 @@ def get_state():
     return jsonify(room.get_state(player_id))
 
 @app.route("/action", methods=["POST"])
-def player_action():
+def player_action():#プレイヤーの行動をサーバーに送信
     data = request.json or {}
     room_id = int(data.get("room_id", 0))
     player_id = int(data.get("player_id", 0))
@@ -82,6 +84,6 @@ def send_chat():
         room.chat_logs.append(f"【{player_name}】: {msg}")
     return jsonify({"success": True})
 
-if __name__ == "__main__":
+if __name__ == "__main__":#このファイルが直接動かされた時
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
