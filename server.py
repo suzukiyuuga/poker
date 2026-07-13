@@ -2,12 +2,8 @@ import os
 from flask import Flask, request, jsonify
 from controller import manager
 
-#基本的に関数の内容がそのまま通信の内容になっている
-#通信の基盤づくり
-# Renderの環境変数からトークンを取得する
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 
-# 【セキュリティチェック】もしトークンが設定されていなければエラー警告を出す
 if not ACCESS_TOKEN:
     print("⚠️ 警告: 環境変数 'ACCESS_TOKEN' が設定されていません！")
 
@@ -22,12 +18,38 @@ def join_game():#入室処理
     data = request.json or {}
     name = data.get("name", "Player")
     
-    # ★ クライアントから送られてきた「目標人数」を受け取る（送られてこなければデフォルト2人）
-    target_players = data.get("target_players", 2)
+    # ★ controllerの変更に基づき、部屋番号、プレイヤーID、およびホストかどうかのフラグを受け取る
+    room_id, player_id, is_host = manager.assign_room(name)
+    room = manager.rooms.get(room_id)
     
-    # ★ controllerのassign_roomに人数を渡す
-    room_id, player_id = manager.assign_room(name, target_players=target_players)
-    return jsonify({"room_id": room_id, "player_id": player_id})
+    return jsonify({
+        "room_id": room_id, 
+        "player_id": player_id, 
+        "is_host": is_host,
+        "target_players": room.target_players if room else 2
+    })
+
+@app.route("/setup_room", methods=["POST"])
+def setup_room():
+    # ★ ホストプレイヤーが人数を確定した際に叩かれる新しいAPIルート
+    data = request.json or {}
+    room_id = int(data.get("room_id", 0))
+    target_players = int(data.get("target_players", 2))
+    
+    room = manager.rooms.get(room_id)
+    if not room: 
+        return jsonify({"error": "Room not found"}), 404
+        
+    # 部屋の目標プレイ人数をホストが指定した値に更新
+    room.target_players = target_players
+    
+    # ログ内の最初の一人の参加メッセージ部分を正しい目標人数に書き直す調整
+    if len(room.action_logs) > 0 and "が参加しました" in room.action_logs[0]:
+        room.action_logs[0] = f"📢 {room.players[0].name} が参加しました。({len(room.players)}/{room.target_players})"
+        
+    # 人数がすでに満たされているかチェックし、満たされていればゲームを開始
+    room.check_start_trigger()
+    return jsonify({"success": True, "target_players": room.target_players})
 
 @app.route("/leave", methods=["POST"])
 def leave_game():#退出処理
@@ -35,7 +57,6 @@ def leave_game():#退出処理
     room_id = int(data.get("room_id", 0))
     player_id = int(data.get("player_id", 0))
     
-    # controllerのmanagerに退室処理を行わせる
     success = manager.leave_room(room_id, player_id)
     return jsonify({"success": success})
 

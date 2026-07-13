@@ -8,8 +8,6 @@ import requests
 from action_popup import ActionPopup  # ファイル先頭に追加
 
 
-
-
 class CardMock:#番号と模様の紐づけ
     def __init__(self, suit, rank):
         self.suit = suit
@@ -148,23 +146,36 @@ class TexasHoldemGUI:
         name = simpledialog.askstring("名前入力", "あなたの名前を入力してください:", parent=self.root)
         if name: self.player_name = name
 
-        target_p = simpledialog.askinteger("参加人数", "何人プレイにしますか？ (2〜6人):", parent=self.root, minvalue=2, maxvalue=6)
-        if not target_p: target_p = 2
-        self.target_players = target_p
-
         if mode_choice:  # 対人戦モード
             self.is_cpu_mode = False
             url = simpledialog.askstring("接続設定", "RenderのWebサービスURLを入力してください:\n(ローカル検証なら http://localhost:5000)", parent=self.root)
             if url: self.server_url = url.rstrip("/")
             
             try:
-                # ★ 修正ポイント: サーバー側へ目標人数（target_players）も一緒に送る
+                # 1. まずは名前をサーバーへ送信して部屋に参加
                 res = requests.post(f"{self.server_url}/join", json={
-                    "name": self.player_name,
-                    "target_players": self.target_players
+                    "name": self.player_name
                 }).json()
+                
                 self.room_id = res["room_id"]
                 self.player_id = res["player_id"]
+                is_host = res.get("is_host", False)
+
+                if is_host:
+                    # 2. ホストプレイヤー（1人目）のみにプレイ人数を聞く
+                    target_p = simpledialog.askinteger("参加人数設定", "部屋のホストになりました！\n何人プレイにしますか？ (2〜6人):", parent=self.root, minvalue=2, maxvalue=6)
+                    if not target_p: target_p = 2
+                    self.target_players = target_p
+                    
+                    # 3. 確定したプレイ人数を設定要求としてサーバーへ通知
+                    requests.post(f"{self.server_url}/setup_room", json={
+                        "room_id": self.room_id,
+                        "target_players": self.target_players
+                    })
+                else:
+                    # 2人目以降は、ホストが既に指定した人数を同期して表示
+                    self.target_players = res.get("target_players", 2)
+                    
                 self.chip_flow_text = f"部屋 [{self.room_id}] に入室しました。指定の人数 ({self.target_players}人) が揃うまでお待ちください..."
                 self.poll_server_loop()
             except Exception as e:
@@ -172,6 +183,11 @@ class TexasHoldemGUI:
                 self.refresh_table("エラー")
         else:  # CPU戦モード
             self.is_cpu_mode = True
+            
+            target_p = simpledialog.askinteger("参加人数", "何人プレイにしますか？ (2〜6人):", parent=self.root, minvalue=2, maxvalue=6)
+            if not target_p: target_p = 2
+            self.target_players = target_p
+            
             from controller import OnlinePokerRoom
             self.local_room = OnlinePokerRoom(room_id=999, target_players=target_p)
             self.player_id = self.local_room.add_player(self.player_name, is_human=True)
@@ -222,13 +238,14 @@ class TexasHoldemGUI:
             # CPUの番なら、ここで遅延実行を予約
             self.schedule_cpu_action_if_needed()
 
-            
             self.root.after(400, self.poll_server_loop)#0.4秒ごと最新状況を取り出す
         else:#オンライン有人対戦
             if self.room_id is not None:
                 try:
                     res = requests.get(f"{self.server_url}/state", params={"room_id": self.room_id, "player_id": self.player_id}).json()
                     self.state_data = res
+                    self.target_players = res.get("target_players", self.target_players) # 人数設定を常に同期
+                    
                     if res.get("game_started"):#ゲームが開始している場合
                         self.announcement_label.config(text=f"部屋 [{self.room_id}] オンライン対戦中")
                         self.append_log(res.get("action_logs", []))
@@ -275,26 +292,12 @@ class TexasHoldemGUI:
         )
         is_intermission = self.state_data.get("show_intermission", False)
 
-        # 今表示すべきパネルの種類を判定する
-        # intermission中 → インターミッションUIだけ表示
-        # 自分の番      → アクションUIだけ表示
-        # それ以外      → パネルを消す
-        should_show_action = (not is_intermission) and is_my_turn
-        should_show_intermission = is_intermission
-
-        # 現在の状態に合わない古いUIが残っていると邪魔なので、
-        # 毎回いったん control_panel を空にしてから、必要なものだけ描き直す
-        #for widget in self.control_panel.winfo_children():
-        #    widget.destroy()
-        #self.control_panel.place_forget()
-
-        if should_show_intermission:
+        if is_intermission:
             desired_mode = "intermission"
-        elif should_show_action:
+        elif is_my_turn:
             desired_mode = "action"
         else:
             desired_mode = None        
-
 
         width = self.canvas.winfo_width() or 950
         height = self.canvas.winfo_height() or 500
@@ -303,7 +306,6 @@ class TexasHoldemGUI:
 
         self.canvas.create_oval(center_x-rx, center_y-ry, center_x+rx, center_y+ry, fill="#154234", outline="#0f3025", width=10)
         
-        players_data = self.state_data.get("players", [])
         pot_val = sum(p.get("game_bet", 0) for p in players_data)
         self.canvas.create_text(center_x, center_y-45, text=f"【{round_name}】\nTotal Pot: {pot_val} pt", fill="#ffb300", font=("Arial", 12, "bold"), justify="center")
 
@@ -314,7 +316,6 @@ class TexasHoldemGUI:
                 self.draw_card_object(bx + (idx * 44), center_y, card)
 
         num_p = len(players_data)
-        me = next((p for p in players_data if p["id"] == self.player_id), None)
         
         for i, p in enumerate(players_data):#各々の手札の書き方
             angle = math.radians(90 + (i * (360 / num_p)))
@@ -342,74 +343,24 @@ class TexasHoldemGUI:
             if p["round_bet"] > 0 and not p["is_busted"]:
                 self.canvas.create_text(px, py+50, text=f"Bet: {p['round_bet']}pt", fill="#ffab91", font=("Arial", 9, "italic"))
 
-        ## 自分の手番UI
-        #if should_show_action:
-        #    self.draw_action_ui(width, height, me)
-
-        ## インターミッションUI
-        #elif should_show_intermission:
-        #    self.draw_intermission_ui(width, height)
-                # control_panel は「モードが変わった時だけ」作り直す
-        
         #現在のモードに合わせてどのUIを更新するべきか選択する
         if desired_mode != self.control_panel_mode:
             for widget in self.control_panel.winfo_children():
                 widget.destroy()
             self.control_panel.place_forget()
             self.control_panel_mode = desired_mode
-
-            """コメントアウト
-            if desired_mode == "action":
-                self.draw_action_ui(width, height, me)
-            elif desired_mode == "intermission":
+            
+            if desired_mode == "intermission":
                 self.draw_intermission_ui(width, height)
-"""
         else:
-            # 同じモードのままなら、再生成しない
-            # ウィンドウサイズ変化等に備えて place だけ維持しておく
-            if desired_mode == "action":
-                self.control_panel.place(x=width/2 - 240, y=height - 110, width=480, height=100)
-            elif desired_mode == "intermission":
+            if desired_mode == "intermission":
                 self.control_panel.place(x=width/2 - 160, y=height/2 - 50, width=320, height=100)
             else:
                 self.control_panel.place_forget()
 
-
-
-
-            #ついか
         # ★ 自分の番になったらポップアップを開く
         if desired_mode == "action":
             self.open_action_popup(me)
-
-
-    def draw_action_ui(self, width, height, me):#プレイヤーコマンドの描画
-
-        ## もしすでにボタンやスライダーが生成されて存在しているなら、新しく作らずにそのまま処理を抜ける
-        #if self.control_panel.winfo_children(): return
-
-        self.control_panel.place(x=width/2 - 240, y=height - 110, width=480, height=100)
-
-        tk.Label(self.control_panel, text=f"【あなたの番】所持: {me['chips']}pt", bg="#123026", fg="#ffff00", font=("Arial", 9, "bold")).pack(pady=2)
-
-        btn_frame = tk.Frame(self.control_panel, bg="#123026")
-        btn_frame.pack(fill="x", padx=10, pady=2)
-
-        tk.Button(btn_frame, text="フォールド", bg="#cfd8dc", width=10, font=("MS Gothic", 9, "bold"), command=lambda: self.submit_action("fold", 0)).pack(side="left", padx=5)
-        
-        highest_bet = self.state_data.get("highest_bet", 0)
-        to_call = min(highest_bet - me["round_bet"], me["chips"])
-        c_text = "チェック" if to_call == 0 else f"{to_call}pt コール"
-        tk.Button(btn_frame, text=c_text, bg="#a5d6a7", width=14, font=("MS Gothic", 9, "bold"), command=lambda: self.submit_action("call", to_call)).pack(side="left", padx=5)
-
-        min_in = (highest_bet + self.state_data.get("min_raise_increment", 20)) - me["round_bet"]
-        max_in = me["chips"]
-        
-        if max_in >= min_in:
-            r_text = "ベット" if highest_bet == 0 else "レイズ"
-            self.raise_amount_var = tk.IntVar(value=min_in)
-            tk.Button(btn_frame, text=r_text, bg="#ffab91", width=8, font=("MS Gothic", 9, "bold"), command=lambda: self.submit_action("raise", self.raise_amount_var.get())).pack(side="left", padx=5)
-            tk.Scale(btn_frame, from_=min_in, to=max_in, orient="horizontal", variable=self.raise_amount_var, bg="#123026", fg="white", highlightthickness=0, length=120).pack(side="left", padx=5)
 
     def submit_action(self, act_type, amount):
         if self.is_cpu_mode:
@@ -433,12 +384,10 @@ class TexasHoldemGUI:
         tk.Button(f, text="次戦へ進む", bg="#a5d6a7", width=12, font=("MS Gothic", 9, "bold"), command=self.submit_intermission).pack(side="left", padx=10)
 
     def submit_intermission(self):
-
         #ログの表示状態の初期化
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", tk.END)
         self.log_text.config(state="disabled")
-        #self.rendered_action_log_count = 0
 
         if self.is_cpu_mode:
             if self.local_room.show_intermission:
@@ -450,7 +399,6 @@ class TexasHoldemGUI:
                 pass
 
     def append_log(self, messages):
-        
         # action_logs が前回より短くなっていたら、
         # controller 側でログがリセットされたとみなしてGUI側もリセット
         if len(messages) < self.rendered_action_log_count:
@@ -458,7 +406,6 @@ class TexasHoldemGUI:
             self.log_text.delete("1.0", tk.END)
             self.log_text.config(state="disabled")
             self.rendered_action_log_count = 0
-        
         
         # messages 全体のうち、まだ描画していないぶんだけ追加
         new_messages = messages[self.rendered_action_log_count:]
@@ -472,7 +419,6 @@ class TexasHoldemGUI:
         self.log_text.config(state="disabled")
 
         self.rendered_action_log_count = len(messages)
-
 
     def schedule_cpu_action_if_needed(self):#CPUの行動を予約する
         if not self.is_cpu_mode:

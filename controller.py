@@ -92,7 +92,7 @@ class SidePot:
         self.amount = amount
         self.eligible_player_ids = []
 
-class PotManager:#ショーダウンがある場合のお金の処理全般
+class PotManager:#ショーダウンがある場合のお慢の処理全般
     def build_pots(self, players):
         pots = []
         active_bets = sorted(list(set(p.game_bet for p in players if p.game_bet > 0)))
@@ -168,9 +168,8 @@ class OnlinePokerRoom:
         self.games_count = 0
         self.show_intermission = False
         
-        self.target_players = target_players  # ★ 指定の開始人数
-
-        self.display_rank_base = 0  #このゲームで使う表示ランク帯の開始値を保存する変数を追加
+        self.target_players = target_players  # 指定の開始人数
+        self.display_rank_base = 0  
 
     def add_player(self, name, is_human=True):
         if len(self.players) >= self.target_players or self.game_started: return None
@@ -179,10 +178,14 @@ class OnlinePokerRoom:
         self.players.append(p)
         self.action_logs.append(f"📢 {name} が参加しました。({len(self.players)}/{self.target_players})")
         
-        # ★ 特定の人数（目標人数）が集まった瞬間に開始
-        if len(self.players) == self.target_players:
-            self.start_new_game()
+        # ★ ホストによる上書き後のチェック用にも使うためトリガー関数化
+        self.check_start_trigger()
         return p_id
+
+    def check_start_trigger(self):
+        # プレイ人数が目標人数に達したら自動でゲームを開始する
+        if not self.game_started and len(self.players) == self.target_players:
+            self.start_new_game()
 
     def start_new_game(self):
         self.game_started = True
@@ -190,11 +193,6 @@ class OnlinePokerRoom:
         self.games_count += 1
 
         self.board.clear()
-        self.deck = Deck()
-
-        # 前ゲームの行動ログをここでリセット
-        self.board.clear()
-
         self.display_rank_base = random.randint(0, 86)
         self.deck = Deck(display_base=self.display_rank_base)
 
@@ -249,36 +247,29 @@ class OnlinePokerRoom:
     def start_betting_round(self, r_name):
         self.round_name = r_name
 
-        # 各プレイヤーのラウンド内状態を初期化
         for p in self.players:
             p.reset_for_new_round()
 
         if r_name == "プリフロップ":
-            # プリフロップでは SB/BB の強制ベットを round_bet に反映
             for p in self.players:
                 p.round_bet = p.game_bet
         else:
-            # フロップ以降はラウンドベットをリセット
             for p in self.players:
                 p.round_bet = 0
 
         self.highest_bet = max(p.round_bet for p in self.players)
         self.min_raise_increment = self.rules.MIN_RAISE_INCREMENT
 
-        # 生きているプレイヤー
         living = [p for p in self.players if not p.is_busted]
         num_living = len(living)
         idx_in_actives = living.index(self.players[self.dealer_idx])
 
-        # 最初に行動するプレイヤーを決定
         if num_living == 2:
-            # ヘッズアップ
             if r_name == "プリフロップ":
-                start_p = living[idx_in_actives]  # SB(=dealer)から
+                start_p = living[idx_in_actives]  
             else:
-                start_p = living[(idx_in_actives + 1) % num_living]  # BB側から
+                start_p = living[(idx_in_actives + 1) % num_living]  
         else:
-            # 3人以上
             start_offset = 3 if r_name == "プリフロップ" else 1
             start_p = living[(idx_in_actives + start_offset) % num_living]
 
@@ -287,33 +278,23 @@ class OnlinePokerRoom:
         self.next_turn()
 
     def next_turn(self):
-        # フォールドしていない人（まだこのハンドに残っている人）
         alive_players = [
             p for p in self.players
             if p.status != HandStatus.FOLDED and not p.is_busted
         ]
-
-        # 実際に行動が必要な人（ALL_IN は除く）
         playable_players = [
             p for p in self.players
             if p.status == HandStatus.PLAYING and not p.is_busted
         ]
 
-        # 1人しか残っていないなら終了
         if len(alive_players) <= 1:
             self.end_game()
             return
 
-        # 行動可能者がいないなら次フェーズへ
         if len(playable_players) == 0:
             self.advance_phase()
             return
 
-        # ここが重要：
-        # 「行動可能なプレイヤー全員」が
-        #   1. すでに acted 済み
-        #   2. highest_bet に追いついている
-        # ならラウンド終了
         all_settled = all(
             p.acted and p.round_bet == self.highest_bet
             for p in playable_players
@@ -322,46 +303,33 @@ class OnlinePokerRoom:
             self.advance_phase()
             return
 
-        # 次の PLAYING プレイヤーを探す
         checked = 0
         while checked < len(self.players):
             p = self.players[self.list_cursor]
-
             if p.status == HandStatus.PLAYING and not p.is_busted:
                 self.current_turn_player_id = p.id
                 return
-
             self.list_cursor = (self.list_cursor + 1) % len(self.players)
             checked += 1
 
-        # 保険
         self.advance_phase()
 
     def think_cpu_action(self, cpu_player):
         act, amnt = decide_cpu_action(self, cpu_player)
         self.handle_action(cpu_player.id, act, amnt)
-        #CPUの処理を外部化
 
     def handle_action(self, p_id, act_type, amount):
         if self.current_turn_player_id != p_id: return False
         p = self.players[p_id]
         
         if act_type == "call":
-            # 実際に必要なコール額を再計算する
             to_call = min(self.highest_bet - p.round_bet, p.chips)
             amount = to_call
-
             p.chips -= amount
             p.round_bet += amount
             p.game_bet += amount
-
-            if p.chips == 0:
-                p.status = HandStatus.ALL_IN
-
-            self.action_logs.append(
-                f"{p.name}: {'チェック' if amount == 0 else f'{amount}ptでコール'}"
-                f"{'（All-in!）' if p.chips == 0 else ''}"
-            )
+            if p.chips == 0: p.status = HandStatus.ALL_IN
+            self.action_logs.append(f"{p.name}: {'チェック' if amount == 0 else f'{amount}ptでコール'}{'（All-in!）' if p.chips == 0 else ''}")
             p.acted = True
         elif act_type == "raise":
             p.chips -= amount
@@ -412,7 +380,7 @@ class OnlinePokerRoom:
         self.round_name = "結果発表"
         survivors = [p for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted]
         
-        if len(survivors) == 1:#一人を除いてほかの人が下りた場合
+        if len(survivors) == 1:
             winner = survivors[0]
             total_pot = sum(p.game_bet for p in self.players)
             winner.chips += total_pot
@@ -449,6 +417,7 @@ class OnlinePokerRoom:
             "show_intermission": self.show_intermission,
             "action_logs": self.action_logs,
             "chat_logs": self.chat_logs,
+            "target_players": self.target_players,  # クライアント同期用に追加
             "players": [
                 {
                     "id": p.id,
@@ -469,35 +438,31 @@ class RoomManager:
         self.rooms = {}
         self.next_room_id = 1
 
-    def assign_room(self, player_name, target_players=2):
-        # 目標人数が一致しており、まだ満員になっていない待機中の部屋を探す
+    def assign_room(self, player_name):
+        # 1. 人数は関係なく、まだゲームが始まっていない空いている待機部屋があれば合流させる
         for r_id, room in self.rooms.items():
-            if room.target_players == target_players and len(room.players) < room.target_players and not room.game_started:
+            if not room.game_started and len(room.players) < room.target_players:
                 p_id = room.add_player(player_name, is_human=True)
-                return r_id, p_id
-        # なければ新しい設定で部屋を作る
+                return r_id, p_id, False  # ホストフラグはFalse
+        
+        # 2. 合流できる部屋がなければ、ひとまず初期値2人で新規部屋（自分がホスト）を作成する
         r_id = self.next_room_id
         self.next_room_id += 1
-        room = OnlinePokerRoom(r_id, target_players=target_players)
+        room = OnlinePokerRoom(r_id, target_players=2)
         self.rooms[r_id] = room
         p_id = room.add_player(player_name, is_human=True)
-        return r_id, p_id
+        return r_id, p_id, True  # ホストフラグはTrue
 
-def leave_room(self, room_id, player_id):
+    def leave_room(self, room_id, player_id):
         room = self.rooms.get(room_id)
         if not room:
             return False
             
-        # 1. 該当するプレイヤーを部屋のリストから削除
         room.players = [p for p in room.players if p.id != player_id]
-        
-        # ログに残す
         room.action_logs.append(f"🏃 プレイヤー(ID:{player_id}) が退室しました。")
         
-        # 2. まだゲームが始まっておらず、生存しているプレイヤーが0人になったら部屋を完全に消去
         if not room.game_started and len(room.players) == 0:
             del self.rooms[room_id]
-            room.action_logs.append(f"🗑️ 部屋 [{room_id}] に誰もいなくなったため、部屋を削除しました。")
             
         return True
 
