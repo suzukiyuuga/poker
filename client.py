@@ -114,7 +114,7 @@ class TexasHoldemGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("♠♥♦♣ テキサスホールデム・ポーカー ♣♦♥♠")
-        self.root.geometry("950x900")
+        self.root.geometry("950x750")
         self.root.resizable(False, False)
 
         self.root.rowconfigure(0, weight=0)
@@ -252,14 +252,17 @@ class TexasHoldemGUI:
 
         self.control_panel = tk.Frame(self.main_container, bg="#123026", bd=3, relief="ridge")
 
-        self.log_frame = tk.Frame(self.root, bg="#0d241c", width=950, height=250)
-        self.log_frame.grid(row=2, column=0, sticky="nsew", pady=(2, 0))
+        # 下部に余白(pady)を追加し、最下行のログが画面下部で見切れないように修正
+        self.log_frame = tk.Frame(self.root, bg="#0d241c", width=950, height=160)
+        self.log_frame.grid(row=2, column=0, sticky="nsew", pady=(2, 20), padx=5)
         self.log_frame.pack_propagate(False)
 
         self.scrollbar = tk.Scrollbar(self.log_frame)
         self.scrollbar.pack(side="right", fill="y")
 
-        self.log_text = tk.Text(self.log_frame, bg="#0d241c", fg="#81c784", font=("Consolas", 11, "bold"), state="disabled", yscrollcommand=self.scrollbar.set)
+        # ★ 修正: state="disabled" を解除し、キー入力を拒否することでスクロールを常時有効化
+        self.log_text = tk.Text(self.log_frame, bg="#0d241c", fg="#81c784", font=("Consolas", 11, "bold"), yscrollcommand=self.scrollbar.set)
+        self.log_text.bind("<Key>", lambda e: "break")
         self.log_text.pack(side="left", fill="both", expand=True)
         self.scrollbar.config(command=self.log_text.yview)
 
@@ -336,7 +339,7 @@ class TexasHoldemGUI:
 
         width = self.canvas.winfo_width() or 950
         height = self.canvas.winfo_height() or 500
-        center_x, center_y = width / 2, height / 2
+        center_x, center_y = width / 2, height / 2 - 35
         rx, ry = 340, 110
 
         self.canvas.create_oval(center_x-rx, center_y-ry, center_x+rx, center_y+ry, fill="#154234", outline="#0f3025", width=10)
@@ -417,9 +420,8 @@ class TexasHoldemGUI:
         tk.Button(f, text="次戦へ進む", bg="#a5d6a7", width=12, font=("MS Gothic", 9, "bold"), command=self.submit_intermission).pack(side="left", padx=10)
 
     def submit_intermission(self):
-        self.log_text.config(state="normal")
+        # ★ 修正: state 切り替えなしで消去
         self.log_text.delete("1.0", tk.END)
-        self.log_text.config(state="disabled")
 
         if self.is_cpu_mode:
             if self.local_room.show_intermission:
@@ -433,9 +435,7 @@ class TexasHoldemGUI:
     def append_log(self, messages):
         # action_logs が前回より短くなっていたら（新ゲーム開始時など）、GUI側もリセット
         if len(messages) < self.rendered_action_log_count:
-            self.log_text.config(state="normal")
             self.log_text.delete("1.0", tk.END)
-            self.log_text.config(state="disabled")
             self.rendered_action_log_count = 0
         
         # messages 全体のうち、まだ描画していないぶんだけ抽出
@@ -443,19 +443,13 @@ class TexasHoldemGUI:
         if not new_messages:
             return
 
-        # 1. 編集可能状態にする
-        self.log_text.config(state="normal")
-        
-        # 2. 新しいログを挿入
+        # ★ 修正: state 切り替えなしで挿入
         for msg in new_messages:
             self.log_text.insert(tk.END, f" {msg}\n")
         
-        # 3. 確実に最下部までスクロール（update_idletasksで描画を反映させてからスクロール）
+        # 確実に最下部までスクロール（update_idletasksで描画を反映させてからスクロール）
         self.log_text.update_idletasks()
         self.log_text.see(tk.END)
-        
-        # 4. 再び編集不可（読み取り専用）に戻す
-        self.log_text.config(state="disabled")
 
         self.rendered_action_log_count = len(messages)
 
