@@ -59,12 +59,16 @@ class BoardPopup:
         msg = self.entry.get().strip()
         if msg:
             if self.client.is_cpu_mode:
-                self.client.local_room.chat_logs.append(f"【{self.client.player_name}】: {msg}")
+                if msg.startswith("/advice"):
+                    self.client.get_local_ai_advice(msg)
+                else:
+                    self.client.local_room.chat_logs.append(f"【{self.client.player_name}】: {msg}")
                 self.entry.delete(0, tk.END)
             else:
                 try:
                     requests.post(f"{self.client.server_url}/chat", json={
                         "room_id": self.client.room_id,
+                        "player_id": self.client.player_id,
                         "name": self.client.player_name,
                         "message": msg
                     })
@@ -139,6 +143,41 @@ class TexasHoldemGUI:
 
         self.setup_ui()
         self.prompt_mode_selection()
+
+    def get_local_ai_advice(self, msg):
+        import os
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            self.local_room.send_private_message(self.player_id, "💡 【AI助言】環境変数 OPENAI_API_KEY が設定されていないため助言機能を利用できません。")
+            return
+        
+        prompt_text = self.local_room.get_advice_prompt(self.player_id, msg)
+        try:
+            res = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {"role": "system", "content": "あなたはテキサスホールデム・ポーカーのアドバイザーです。プレイヤーの状況(自分の手札、場札、チップ量)のみを元に、短く的確にアドバイスしてください。"},
+                        {"role": "user", "content": prompt_text}
+                    ],
+                    "max_tokens": 150
+                },
+                timeout=10
+            )
+            if res.status_code == 200:
+                advice = res.json()["choices"][0]["message"]["content"].strip()
+                advice_msg = f"💡 【AI助言】\n{advice}"
+            else:
+                advice_msg = f"💡 【AI助言エラー】APIからの応答に失敗しました。(Status: {res.status_code})"
+        except Exception as e:
+            advice_msg = f"💡 【AI助言エラー】通信エラーが発生しました: {e}"
+
+        self.local_room.send_private_message(self.player_id, advice_msg)
 
     def prompt_mode_selection(self):
         mode_choice = messagebox.askyesnocancel("モード選択", "オンライン対人戦をプレイしますか？\n\n【はい】 -> 対人戦\n【いいえ】 -> CPU戦\n【キャンセル】 -> 終了")

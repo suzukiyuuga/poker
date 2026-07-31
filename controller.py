@@ -156,6 +156,7 @@ class OnlinePokerRoom:
         self.dealer_idx = -1
         self.action_logs = []
         self.chat_logs = []
+        self.private_logs = {}  # プレイヤー個別のプライベートログ
         self.rules = GameStructure()
         self.pot_manager = PotManager()
         
@@ -176,11 +177,45 @@ class OnlinePokerRoom:
         p_id = len(self.players)
         p = Player(p_id, name, is_human=is_human)
         self.players.append(p)
+        self.private_logs[p_id] = []
         self.action_logs.append(f"📢 {name} が参加しました。({len(self.players)}/{self.target_players})")
         
         # ★ ホストによる上書き後のチェック用にも使うためトリガー関数化
         self.check_start_trigger()
         return p_id
+
+    def send_private_message(self, player_id, msg):
+        if player_id in self.private_logs:
+            self.private_logs[player_id].append(msg)
+
+    def get_advice_prompt(self, player_id, user_msg):
+        p = next((pl for pl in self.players if pl.id == player_id), None)
+        if not p:
+            return "プレイヤー情報が見つかりません。"
+        
+        hand_str = f"{p.hand[0].suit}{p.hand[0].display_rank}, {p.hand[1].suit}{p.hand[1].display_rank}" if len(p.hand) == 2 else "なし"
+        board_str = ", ".join([f"{c.suit}{c.display_rank}" for c in self.board]) if self.board else "なし"
+        total_pot = sum(pl.game_bet for pl in self.players)
+        to_call = max(0, self.highest_bet - p.round_bet)
+
+        players_status = []
+        for pl in self.players:
+            status = "離脱" if pl.is_busted else ("フォールド" if pl.status == HandStatus.FOLDED else "参加中")
+            players_status.append(f"{pl.name}({status}, Bet:{pl.round_bet}pt)")
+
+        prompt = (
+            f"現在のラウンド: {self.round_name}\n"
+            f"あなたの名前: {p.name}\n"
+            f"あなたの手札: {hand_str}\n"
+            f"コミュニティカード(場札): {board_str}\n"
+            f"あなたの残チップ: {p.chips}pt\n"
+            f"現在のトータルポット: {total_pot}pt\n"
+            f"コールに必要な額: {to_call}pt\n"
+            f"参加者の状態: {', '.join(players_status)}\n\n"
+            f"質問内容: {user_msg}\n\n"
+            "上記の情報だけを元に、次にとるべき適切なアクションと簡単な理由を日本語でアドバイスしてください。"
+        )
+        return prompt
 
     def check_start_trigger(self):
         # プレイ人数が目標人数に達したら自動でゲームを開始する
@@ -431,6 +466,8 @@ class OnlinePokerRoom:
         self.show_intermission = True
 
     def get_state(self, p_id):
+        user_private_logs = self.private_logs.get(p_id, [])
+        combined_logs = self.action_logs + user_private_logs
         return {
             "round_name": self.round_name,
             "board": [[c.suit, c.display_rank] for c in self.board],
@@ -439,7 +476,7 @@ class OnlinePokerRoom:
             "current_turn_player_id": self.current_turn_player_id,
             "game_started": self.game_started,
             "show_intermission": self.show_intermission,
-            "action_logs": self.action_logs,
+            "action_logs": combined_logs,
             "chat_logs": self.chat_logs,
             "target_players": self.target_players,  # クライアント同期用に追加
             "players": [

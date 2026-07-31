@@ -1,8 +1,10 @@
 import os
+import requests as http_requests
 from flask import Flask, request, jsonify
 from controller import manager
 
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 if not ACCESS_TOKEN:
     print("⚠️ 警告: 環境変数 'ACCESS_TOKEN' が設定されていません！")
@@ -97,12 +99,47 @@ def intermission_action():
 def send_chat():
     data = request.json or {}
     room_id = int(data.get("room_id", 0))
+    player_id = int(data.get("player_id", -1))
     player_name = data.get("name", "Unknown")
     msg = data.get("message", "")
     room = manager.rooms.get(room_id)
     if not room: return jsonify({"error": "Room not found"}), 404
+
     if msg:
-        room.chat_logs.append(f"【{player_name}】: {msg}")
+        if msg.startswith("/advice"):
+            if not OPENAI_API_KEY:
+                advice_msg = "💡 【AI助言】サーバー側で OPENAI_API_KEY が設定されていないため、助言機能を利用できません。"
+            else:
+                prompt_text = room.get_advice_prompt(player_id, msg)
+                try:
+                    res = http_requests.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {OPENAI_API_KEY}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": "gpt-4o-mini",
+                            "messages": [
+                                {"role": "system", "content": "あなたはテキサスホールデム・ポーカーのアドバイザーです。プレイヤーの状況(自分の手札、場札、チップ量)のみを元に、短く的確にアドバイスしてください。"},
+                                {"role": "user", "content": prompt_text}
+                            ],
+                            "max_tokens": 150
+                        },
+                        timeout=10
+                    )
+                    if res.status_code == 200:
+                        advice = res.json()["choices"][0]["message"]["content"].strip()
+                        advice_msg = f"💡 【AI助言】\n{advice}"
+                    else:
+                        advice_msg = f"💡 【AI助言エラー】APIからの応答に失敗しました。(Status: {res.status_code})"
+                except Exception as e:
+                    advice_msg = f"💡 【AI助言エラー】通信エラーが発生しました: {e}"
+
+            room.send_private_message(player_id, advice_msg)
+        else:
+            room.chat_logs.append(f"【{player_name}】: {msg}")
+            
     return jsonify({"success": True})
 
 if __name__ == "__main__":#このファイルが直接動かされた時
