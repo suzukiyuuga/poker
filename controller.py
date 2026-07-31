@@ -380,23 +380,46 @@ class OnlinePokerRoom:
         self.round_name = "結果発表"
         survivors = [p for p in self.players if p.status != HandStatus.FOLDED and not p.is_busted]
         
+        # ログ区切り線
+        self.action_logs.append(f"🏁 ―――――――――― 【 第 {self.games_count} 回 戦 結 果 】 ―――――――――― 🏁")
+
+        # ★ 全プレイヤーの手札と役判定をログに出力（フォールドした人も含める）
+        self.action_logs.append("🃏 【参加者全員の手札と役】")
+        for p in self.players:
+            if not p.is_busted and p.hand:
+                # 役の判定（7枚のカードから計算）
+                score, name = evaluate_7_cards(p.hand + self.board)
+                p.score = score
+                p.hand_name = name
+                
+                # 伏せカード表記の整形
+                c1, c2 = p.hand[0], p.hand[1]
+                
+                if p.status == HandStatus.FOLDED:
+                    self.action_logs.append(f"  ・ {p.name:<8}: {c1} {c2} -> 【🏳️ FOLDED ({name})】")
+                else:
+                    self.action_logs.append(f"  ・ {p.name:<8}: {c1} {c2} -> 【{name}】")
+            elif p.is_busted:
+                self.action_logs.append(f"  ・ {p.name:<8}: ☠️ BUSTED")
+
+        # 勝敗結果・ポット分配のログ出力
         if len(survivors) == 1:
             winner = survivors[0]
             total_pot = sum(p.game_bet for p in self.players)
             winner.chips += total_pot
-            self.action_logs.append(f"全員がフォールドしたため、{winner.name} の不戦勝です！ 💰 {total_pot}pt を獲得。")
+            self.action_logs.append(f"🏆 勝者: {winner.name} (他プレイヤー全員フォールド)")
+            self.action_logs.append(f"💰 獲得チップ: {total_pot} pt")
         else:
-            self.action_logs.append("================= 最終結果 (Showdown) =================")
-            for p in survivors:
-                score, name = evaluate_7_cards(p.hand + self.board)
-                p.score = score
-                p.hand_name = name
-                self.action_logs.append(f" 🃏 {p.name:<6}: {p.hand[0]} {p.hand[1]} -> 【{name}】")
-            
             dist_logs = self.pot_manager.distribute_pots(self.players)
             self.action_logs.extend(dist_logs)
-            self.action_logs.append("========================================================")
 
+        # 全プレイヤーの現在の最終残高をログに出力
+        self.action_logs.append("📊 【各プレイヤーの最終所持チップ】")
+        for p in self.players:
+            status_str = " (BUSTED)" if p.chips <= 0 else ""
+            self.action_logs.append(f"  ・ {p.name}: {p.chips} pt{status_str}")
+
+        # 破産（トビ）チェック
         for p in self.players:
             p.game_bet = 0
             if p.chips <= 0 and not p.is_busted:
@@ -404,6 +427,7 @@ class OnlinePokerRoom:
                 p.is_busted = True
                 self.action_logs.append(f"📢 【アナウンス】{p.name} が完全に破産（トビ）しました。")
 
+        self.action_logs.append("🏁 ―――――――――――――――――――――――――――――――――――――――――――――― 🏁")
         self.show_intermission = True
 
     def get_state(self, p_id):
