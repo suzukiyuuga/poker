@@ -93,18 +93,19 @@ class TexasHoldemGUI:
 
         popup = ActionPopup(self.root, me, to_call, can_raise, min_raise_inc=min_raise_inc)
         
-        # ★ チャット欄の操作を可能にするため、ポップアップのモーダルキャプチャ（grab）を解除
         try:
             popup.grab_release()
         except Exception:
             pass
 
-        self.root.wait_window(popup)
+        # ★ wait_window を使わず、ポップアップ閉鎖時に呼び出すコールバックを設定
+        def on_popup_close():
+            self.action_popup_open = False
+            if popup.result_action:
+                self.submit_action(popup.result_action, popup.result_amount)
 
-        self.action_popup_open = False
-
-        if popup.result_action:
-            self.submit_action(popup.result_action, popup.result_amount)
+        # ポップアップ破棄時にコールバックを実行（wait_windowでブロックしないため poll_server_loop が動きます）
+        popup.bind("<Destroy>", lambda e: on_popup_close() if e.widget == popup else None)
 
     def __init__(self, root):
         self.root = root

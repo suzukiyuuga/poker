@@ -13,20 +13,36 @@ app = Flask(__name__)
 def index():
     return jsonify({"status": "ok", "message": "Poker Server is Running!"})
 
-@app.route("/join", methods=["POST"])
-def join_game():#入室処理
+@app.route('/join', methods=['POST'])
+def join_game():
     data = request.json or {}
-    name = data.get("name", "Player")
-    
-    # ★ controllerの変更に基づき、部屋番号、プレイヤーID、およびホストかどうかのフラグを受け取る
-    room_id, player_id, is_host = manager.assign_room(name)
-    room = manager.rooms.get(room_id)
-    
+    player_name = data.get("name", "Player")
+
+    # 1. 空きのある既存の部屋を探す
+    target_room = None
+    for r_id, room in rooms.items():
+        # まだゲームが始まっておらず、かつ募集人数に達していない部屋
+        if not room.game_started and len(room.players) < room.target_players:
+            target_room = room
+            break
+
+    # 2. 空き部屋がなければ新しい部屋を作成（ホストとなる）
+    if target_room is None:
+        new_room_id = str(uuid.uuid4())[:8]  # 一意の部屋IDを生成
+        target_room = OnlinePokerRoom(room_id=new_room_id, target_players=2) # 初期枠はデフォルト2人
+        rooms[new_room_id] = target_room
+        is_host = True
+    else:
+        is_host = False
+
+    # 3. プレイヤーを追加
+    player_id = target_room.add_player(player_name, is_human=True)
+
     return jsonify({
-        "room_id": room_id, 
-        "player_id": player_id, 
+        "room_id": target_room.room_id,
+        "player_id": player_id,
         "is_host": is_host,
-        "target_players": room.target_players if room else 2
+        "target_players": target_room.target_players
     })
 
 @app.route("/setup_room", methods=["POST"])
