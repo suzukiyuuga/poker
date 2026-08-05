@@ -79,7 +79,7 @@ def evaluate_preflop_structure(hand):
     c1, c2 = hand
     v1, v2 = c1.value, c2.value
 
-    score = 0
+    score = 25
 
     # ペア
     if v1 == v2:
